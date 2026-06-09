@@ -174,3 +174,36 @@ def run_setup(output_dir: Optional[str] = None) -> dict:
         **gpu_info,
         "pyproject_path": toml_path,
     }
+
+
+# --- CLI entry point ---
+
+def main():
+    """CLI: python setup_env.py --generate <output_path> <cuda_version>"""
+    import sys
+    import json
+
+    if len(sys.argv) >= 4 and sys.argv[1] == '--generate':
+        output_path = sys.argv[2]
+        cuda_version = sys.argv[3]
+        generate_pyproject_toml(output_path, cuda_version)
+        result = {
+            "gpu_name": "detected",
+            "series": "unknown",
+            "cuda": cuda_version,
+            "pyproject_path": output_path,
+        }
+        print(json.dumps(result))
+        return
+
+    # Default: run full setup
+    try:
+        result = run_setup()
+        print(json.dumps(result))
+    except (NvidiaSmiError, UnsupportedGpuError) as e:
+        print(json.dumps({"error": str(e)}), file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
