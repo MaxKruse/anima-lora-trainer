@@ -72,8 +72,8 @@ describe('LogViewer', () => {
 
     await waitFor(() => {
       const errorLine = screen.getByText('ERROR: Failed to allocate tensor');
-      const lineDiv = errorLine.closest('.log-line-error');
-      expect(lineDiv).toBeInTheDocument();
+      expect(errorLine).toHaveClass('text-red-600');
+      expect(errorLine).toHaveClass('dark:text-red-400');
     });
   });
 });

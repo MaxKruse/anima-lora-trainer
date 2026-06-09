@@ -24,6 +24,14 @@ const downloadedModel = {
   expectedSizeBytes: 4_180_000_000,
 };
 
+const downloadingModel = {
+  name: 'diffusion_model',
+  status: 'downloading' as const,
+  progress: 45,
+  expectedSizeBytes: 4_180_000_000,
+  canAbort: true,
+};
+
 describe('ModelDownloader', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -57,40 +65,70 @@ describe('ModelDownloader', () => {
     expect(buttons).toHaveLength(3);
   });
 
-  it('shows progress bar during download', async () => {
-    // Initial status fetch — all pending
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ models: [pendingModel] }),
-    });
-
-    // Download POST
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ status: 'started' }),
-    });
-
-    // Polling returns downloading status
+  it('shows circular progress indicator during download', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: async () => ({
-        models: [{ ...pendingModel, status: 'downloading' as const, progress: 45 }],
-      }),
+      json: async () => ({ models: [{ ...downloadingModel, progress: 45 }] }),
     });
 
     const ModelDownloader = await importModelDownloader();
     render(<ModelDownloader />);
 
     await waitFor(() => {
-      expect(screen.getByText(/diffusion_model/i)).toBeInTheDocument();
+      expect(screen.getByRole('progressbar')).toBeInTheDocument();
     });
 
-    const buttons = screen.getAllByRole('button', { name: /download/i });
-    fireEvent.click(buttons[0]);
+    // Should show percentage text
+    expect(screen.getByText('45%')).toBeInTheDocument();
+  });
+
+  it('shows abort button on downloading model', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ models: [downloadingModel] }),
+    });
+
+    const ModelDownloader = await importModelDownloader();
+    render(<ModelDownloader />);
 
     await waitFor(() => {
       expect(screen.getByRole('progressbar')).toBeInTheDocument();
-    }, { timeout: 5000 });
+    });
+
+    // Abort button should exist (visible on hover)
+    const abortButton = screen.getByRole('button', { name: /abort download/i });
+    expect(abortButton).toBeInTheDocument();
+  });
+
+  it('calls DELETE on abort button click', async () => {
+    // Initial status fetch
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ models: [downloadingModel] }),
+    });
+
+    // Abort response
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: 'aborted' }),
+    });
+
+    const ModelDownloader = await importModelDownloader();
+    render(<ModelDownloader />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    });
+
+    const abortButton = screen.getByRole('button', { name: /abort download/i });
+    fireEvent.click(abortButton);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/models?modelName=diffusion_model'),
+        expect.objectContaining({ method: 'DELETE' })
+      );
+    });
   });
 
   it('shows checkmark when download completes', async () => {

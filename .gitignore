@@ -42,3 +42,6 @@ next-env.d.ts
 
 # app config (local paths)
 .config/
+
+# cloned sd-scripts repo
+/sd-scripts

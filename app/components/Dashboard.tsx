@@ -19,6 +19,11 @@ interface AppConfig {
 
 type DashboardSection = 'setup' | 'models' | 'train' | 'jobs';
 
+interface SetupReadiness {
+  venvReady: boolean;
+  sdScriptsReady: boolean;
+}
+
 export function Dashboard() {
   const [activeSection, setActiveSection] = useState<DashboardSection>('train');
   const [config, setConfig] = useState<AppConfig>({
@@ -29,6 +34,47 @@ export function Dashboard() {
   const [saving, setSaving] = useState(false);
   const [trainingResponse, setTrainingResponse] = useState<string | null>(null);
   const [matrixMode, setMatrixMode] = useState<'single' | 'matrix'>('single');
+
+  // Setup readiness gate
+  const [setupReadiness, setSetupReadiness] = useState<SetupReadiness | null>(null);
+  const isSetupComplete = setupReadiness?.venvReady && setupReadiness?.sdScriptsReady;
+  const isSetupChecking = setupReadiness === null;
+
+  // Check setup readiness on mount
+  useEffect(() => {
+    fetch('/api/setup')
+      .then((res) => res.json() as Promise<{ venvReady: boolean; sdScriptsReady: boolean }>)
+      .then((data) => {
+        setSetupReadiness({ venvReady: data.venvReady, sdScriptsReady: data.sdScriptsReady });
+        // If setup is incomplete, force-navigate to Setup section
+        if (!data.venvReady || !data.sdScriptsReady) {
+          setActiveSection('setup');
+        }
+      })
+      .catch(() => {
+        // Network error — treat as not ready and show Setup
+        setSetupReadiness({ venvReady: false, sdScriptsReady: false });
+        setActiveSection('setup');
+      });
+  }, []);
+
+  // Re-check readiness when leaving Setup section (in case setup just completed)
+  useEffect(() => {
+    if (activeSection !== 'setup') return;
+    const timer = setInterval(() => {
+      fetch('/api/setup')
+        .then((res) => res.json() as Promise<{ venvReady: boolean; sdScriptsReady: boolean; setup: { status: string } }>)
+        .then((data) => {
+          setSetupReadiness({ venvReady: data.venvReady, sdScriptsReady: data.sdScriptsReady });
+          // If setup just completed and we're still on Setup, stop polling
+          if (data.venvReady && data.sdScriptsReady && data.setup.status === 'success') {
+            clearInterval(timer);
+          }
+        })
+        .catch(() => {});
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [activeSection]);
 
   // Load config on mount
   useEffect(() => {
@@ -136,19 +182,35 @@ export function Dashboard() {
 
             {/* Section navigation */}
             <nav className="flex gap-1">
-              {sections.map((section) => (
-                <button
-                  key={section.key}
-                  onClick={() => setActiveSection(section.key)}
-                  className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-                    activeSection === section.key
-                      ? 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100'
-                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/50'
-                  }`}
-                >
-                  {section.label}
-                </button>
-              ))}
+              {sections.map((section) => {
+                const isLocked = !isSetupComplete && section.key !== 'setup';
+                const isActive = activeSection === section.key;
+
+                return (
+                  <button
+                    key={section.key}
+                    onClick={() => {
+                      if (!isLocked) setActiveSection(section.key);
+                    }}
+                    disabled={isLocked}
+                    className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                      isLocked
+                        ? 'text-slate-300 dark:text-slate-600 cursor-not-allowed'
+                        : isActive
+                        ? 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100'
+                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/50'
+                    }`}
+                    title={isLocked ? 'Complete setup to unlock' : undefined}
+                  >
+                    {section.label}
+                    {isLocked && (
+                      <svg className="inline-block w-3.5 h-3.5 ml-1.5 -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                      </svg>
+                    )}
+                  </button>
+                );
+              })}
             </nav>
           </div>
         </div>
@@ -156,7 +218,14 @@ export function Dashboard() {
 
       {/* Main content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeSection === 'setup' && <SetupWizard />}
+        {/* Brief loading state while setup readiness is being checked */}
+        {isSetupChecking && (
+          <div className="max-w-lg mx-auto p-6">
+            <p className="text-slate-500 dark:text-slate-400">Checking environment...</p>
+          </div>
+        )}
+
+        {!isSetupChecking && activeSection === 'setup' && <SetupWizard />}
 
         {activeSection === 'models' && <ModelDownloader />}
 

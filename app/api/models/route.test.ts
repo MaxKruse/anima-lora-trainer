@@ -14,29 +14,29 @@ vi.mock('next/server', () => ({
 
 // --- Mock model-manifest ---
 vi.mock('../../lib/model-manifest', () => ({
-  getModelManifest: () => [
+  getResolvedModelManifest: () => Promise.resolve([
     {
       name: 'diffusion_model',
       hfRepo: 'circlestone-labs/Anima',
       hfFile: 'split_files/diffusion_models/anima-base-v1.0.safetensors',
       localPath: 'models/anima/diffusion_models/anima-base-v1.0.safetensors',
-      expectedSizeBytes: 4_180_000_000,
+      expectedSizeBytes: 4_182_218_328,
     },
     {
       name: 'vae',
       hfRepo: 'circlestone-labs/Anima',
       hfFile: 'split_files/vae/qwen_image_vae.safetensors',
       localPath: 'models/anima/vae/qwen_image_vae.safetensors',
-      expectedSizeBytes: 254_000_000,
+      expectedSizeBytes: 253_806_246,
     },
     {
       name: 'text_encoder',
       hfRepo: 'circlestone-labs/Anima',
       hfFile: 'split_files/text_encoders/qwen_3_06b_base.safetensors',
       localPath: 'models/anima/text_encoders/qwen_3_06b_base.safetensors',
-      expectedSizeBytes: 1_200_000_000,
+      expectedSizeBytes: 1_192_135_096,
     },
-  ],
+  ]),
 }));
 
 // --- Mock model-downloader ---
@@ -62,6 +62,8 @@ async function importRoute() {
 describe('/api/models', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Re-import to reset the activeDownloads map
+    vi.resetModules();
   });
 
   it('GET returns status of all models', async () => {
@@ -74,6 +76,7 @@ describe('/api/models', () => {
     expect(body.models).toHaveLength(3);
     expect(body.models[0]).toHaveProperty('name');
     expect(body.models[0]).toHaveProperty('status');
+    expect(body.models[0]).toHaveProperty('canAbort');
   });
 
   it('GET shows downloaded status for existing models', async () => {
@@ -90,7 +93,7 @@ describe('/api/models', () => {
     expect(body.models[0].status).toBe('downloaded');
   });
 
-  it('POST triggers download of a specific model', async () => {
+  it('POST triggers download of a specific model and returns immediately', async () => {
     mockCheckStatus.mockResolvedValue({ exists: false });
     mockDownload.mockResolvedValue(undefined);
 
@@ -102,6 +105,9 @@ describe('/api/models', () => {
     const body = await response.json();
 
     expect(body.status).toBe('started');
+    // Download runs in background, so it may not have been called yet
+    // Wait a tick for the background promise
+    await new Promise(resolve => setTimeout(resolve, 10));
     expect(mockDownload).toHaveBeenCalled();
   });
 
@@ -121,18 +127,56 @@ describe('/api/models', () => {
     expect(response.status).toBe(409);
   });
 
-  it('POST returns 422 if verification fails after download', async () => {
+  it('DELETE aborts an active download', async () => {
     mockCheckStatus.mockResolvedValue({ exists: false });
-    mockDownload.mockRejectedValue(new Error('Verification failed'));
+    // Make download never resolve so it stays active
+    mockDownload.mockReturnValue(new Promise(() => {}));
 
     const route = await importRoute();
-    const response = await route.POST(new Request('http://localhost/api/models', {
+
+    // Start a download
+    await route.POST(new Request('http://localhost/api/models', {
       method: 'POST',
-      body: JSON.stringify({ modelName: 'vae' }),
+      body: JSON.stringify({ modelName: 'diffusion_model' }),
     }));
 
-    expect(response.status).toBe(422);
-    const body = await response.json();
-    expect(body.error).toBeDefined();
+    // Verify it shows as downloading with canAbort
+    const getStatus = await route.GET();
+    const statusBody = await getStatus.json();
+    expect(statusBody.models[0].canAbort).toBe(true);
+
+    // Abort the download
+    const deleteResponse = await route.DELETE(
+      new Request('http://localhost/api/models?modelName=diffusion_model', {
+        method: 'DELETE',
+      })
+    );
+    const deleteBody = await deleteResponse.json();
+
+    expect(deleteBody.status).toBe('aborted');
+  });
+
+  it('DELETE returns 404 if no active download', async () => {
+    mockCheckStatus.mockResolvedValue({ exists: false });
+
+    const route = await importRoute();
+    const response = await route.DELETE(
+      new Request('http://localhost/api/models?modelName=diffusion_model', {
+        method: 'DELETE',
+      })
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it('DELETE returns 400 if modelName missing', async () => {
+    const route = await importRoute();
+    const response = await route.DELETE(
+      new Request('http://localhost/api/models', {
+        method: 'DELETE',
+      })
+    );
+
+    expect(response.status).toBe(400);
   });
 });

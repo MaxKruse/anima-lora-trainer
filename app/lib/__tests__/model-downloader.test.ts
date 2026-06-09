@@ -64,7 +64,7 @@ describe('downloadModel', () => {
     vi.clearAllMocks();
   });
 
-  it('calls huggingface-cli with correct args for each model entry', async () => {
+  it('calls hf with correct args for each model entry', async () => {
     mockSpawn.mockReturnValueOnce(
       createMockProcess('', '', 0)
     );
@@ -85,7 +85,7 @@ describe('downloadModel', () => {
     const cmd = callArgs[0] as string;
     const args = callArgs[1] as string[];
 
-    expect(cmd).toContain('huggingface-cli') || args.includes('huggingface-cli');
+    expect(cmd).toBe('hf');
     expect(args).toContain('download');
     expect(args).toContain('circlestone-labs/Anima');
     expect(args).toContain('split_files/diffusion_models/anima-base-v1.0.safetensors');
