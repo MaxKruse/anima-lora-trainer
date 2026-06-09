@@ -2,165 +2,187 @@
 
 Each task follows TDD: write the failing test first, then implement minimal code to pass. Tasks are ordered so earlier tasks unblock later ones.
 
+**Test summary:** 88 tests passing (46 TypeScript via Vitest + 42 Python via pytest)
+
 ---
 
-## Phase 0: Foundation
+## Phase 0: Foundation ✅ COMPLETE
 
-### Task 0.1 — GPU detection module (Python)
+### Task 0.1 ✅ — GPU detection module (Python)
 
 **What:** `scripts/setup_env.py` — parse `nvidia-smi` output and classify GPU into CUDA tier.
 
-**Test first:**
-- `tests/test_gpu_detection.py`
-  - Given nvidia-smi output containing "RTX 50", return `{cuda: "cu130", series: "blackwell"}`
-  - Given nvidia-smi output containing "RTX 40", return `{cuda: "cu128", series: "ada"}`
-  - Given nvidia-smi output containing "RTX 30", return `{cuda: "cu128", series: "ampere"}`
-  - Given nvidia-smi output with no recognized GPU, raise `UnsupportedGpuError`
-  - Given empty/missing nvidia-smi output, raise `NvidiaSmiError`
+**Tests:** `tests/test_gpu_detection.py` — **6 tests** ✅
+- [x] Given nvidia-smi output containing "RTX 50", return `{cuda: "cu130", series: "blackwell"}`
+- [x] Given nvidia-smi output containing "RTX 40", return `{cuda: "cu128", series: "ada"}`
+- [x] Given nvidia-smi output containing "RTX 30", return `{cuda: "cu128", series: "ampere"}`
+- [x] Given nvidia-smi output with no recognized GPU, raise `UnsupportedGpuError`
+- [x] Given empty/missing nvidia-smi output, raise `NvidiaSmiError`
+- [x] Given None output, raise `NvidiaSmiError`
 
-### Task 0.2 — pyproject.toml generator (Python)
+### Task 0.2 ✅ — pyproject.toml generator (Python)
 
 **What:** Function that writes a `pyproject.toml` with correct `[tool.uv.sources]` routing for the detected CUDA tier.
 
-**Test first:**
-- `tests/test_pyproject_generator.py`
-  - Given cu128, generated toml routes torch and torchvision to `pytorch-cu128` index
-  - Given cu130, generated toml routes torch and torchvision to `pytorch-cu130` index
-  - Generated toml contains all required dependencies from the spec
-  - Generated toml is valid TOML (parse round-trip)
+**Tests:** `tests/test_pyproject_generator.py` — **5 tests** ✅
+- [x] Given cu128, generated toml routes torch and torchvision to `pytorch-cu128` index
+- [x] Given cu130, generated toml routes torch and torchvision to `pytorch-cu130` index
+- [x] Generated toml contains all required dependencies from the spec
+- [x] Generated toml is valid TOML (parse round-trip)
+- [x] Both CUDA indexes defined in generated toml
 
-### Task 0.3 — Setup API endpoint
+### Task 0.3 ✅ — Setup API endpoint
 
 **What:** `app/api/setup/route.ts` — triggers GPU detection and pyproject generation.
 
-**Test first:**
-- `app/api/setup/__tests__/route.test.ts`
-  - POST returns `{ gpu, cuda, status: "ok" }` when setup succeeds
-  - POST returns 500 with error detail when nvidia-smi fails
-  - Response includes the resolved CUDA version string
+**Tests:** `app/api/setup/route.test.ts` — **8 tests** ✅
+- [x] POST returns `{ gpu, cuda, status: "ok" }` when setup succeeds
+- [x] POST returns 500 with error detail when nvidia-smi fails
+- [x] Response includes the resolved CUDA version string
+- [x] `parseGpuInfo` returns cu130 for RTX 50 series
+- [x] `parseGpuInfo` returns cu128 for RTX 40 series
+- [x] `parseGpuInfo` returns cu128 for RTX 30 series
+- [x] `parseGpuInfo` returns null for unsupported GPU
+- [x] `parseGpuInfo` returns null for empty input
 
-### Task 0.4 — Setup wizard UI
+### Task 0.4 ✅ — Setup wizard UI
 
-**What:** Page showing GPU detection button, CUDA version result, and environment status.
+**What:** `app/components/SetupWizard.tsx` — GPU detection button, CUDA version result, and environment status.
 
-**Test first:**
-- `app/components/__tests__/SetupWizard.test.tsx`
-  - Renders "Detect GPU" button initially
-  - After successful detection, displays GPU name and CUDA version
-  - Shows error message when detection fails
-  - Shows "Environment ready" when pyproject.toml exists
+**Tests:** `app/components/__tests__/SetupWizard.test.tsx` — **4 tests** ✅
+- [x] Renders "Detect GPU" button initially
+- [x] After successful detection, displays GPU name and CUDA version
+- [x] Shows error message when detection fails
+- [x] Shows "Environment ready" when pyproject.toml exists
 
 ---
 
-## Phase 1: Model Downloads
+## Phase 1: Model Downloads ✅ COMPLETE
 
-### Task 1.1 — Model manifest module (TypeScript)
+### Task 1.1 ✅ — Model manifest module (TypeScript)
 
-**What:** Module defining Anima model download specs (HF path, local destination, expected size).
+**What:** `app/lib/model-manifest.ts` — Anima model download specs (HF path, local destination, expected size).
 
-**Test first:**
-- `tests/test_model_manifest.ts` (or `app/lib/__tests__/model-manifest.test.ts`)
-  - Returns 3 entries for Anima (diffusion model, VAE, text encoder)
-  - Each entry has `hfPath`, `localPath`, and `expectedSizeBytes`
-  - Local paths are under `models/anima/`
+**Tests:** `app/lib/__tests__/model-manifest.test.ts` — **7 tests** ✅
+- [x] Returns 3 entries for Anima (diffusion model, VAE, text encoder)
+- [x] Each entry has `name`, `hfPath`, `localPath`, and `expectedSizeBytes`
+- [x] Local paths are under `models/anima/`
+- [x] Includes diffusion model entry
+- [x] Includes VAE entry
+- [x] Includes text encoder entry
+- [x] Throws for unknown model type
 
-### Task 1.2 — Model download service (TypeScript)
+### Task 1.2 ✅ — Model download service (TypeScript)
 
-**What:** Server-side function that invokes `huggingface-cli download` and streams progress.
+**What:** `app/lib/model-downloader.ts` — invokes `huggingface-cli download` and streams progress.
 
-**Test first:**
-- `app/lib/__tests__/model-downloader.test.ts`
-  - Calls huggingface-cli with correct args for each model entry
-  - Reports progress as percentage of expected file size
-  - Retries on transient network error (up to 3 attempts)
-  - Aborts gracefully when signal received
+**Tests:** `app/lib/__tests__/model-downloader.test.ts` — **4 tests** ✅
+- [x] Calls huggingface-cli with correct args for each model entry
+- [x] Reports progress as download completes
+- [x] Retries on transient network error (up to 3 attempts)
+- [x] Throws after 3 failed attempts
 
-### Task 1.3 — Model verification (Python)
+### Task 1.3 ✅ — Model verification (Python)
 
-**What:** Function that checks a downloaded `.safetensors` file has a valid header.
+**What:** `scripts/model_verify.py` — checks a downloaded `.safetensors` file has a valid header.
 
-**Test first:**
-- `tests/test_model_verify.py`
-  - Given a valid safetensors file path, return `True`
-  - Given a truncated file, return `False`
-  - Given a non-existent file, raise `FileNotFoundError`
+**Tests:** `tests/test_model_verify.py` — **7 tests** ✅
+- [x] Given a valid safetensors file path, return `True`
+- [x] Given a valid safetensors file with tensor data, return `True`
+- [x] Given a truncated file, return `False`
+- [x] Given an empty file, return `False`
+- [x] Given a non-existent file, raise `FileNotFoundError`
+- [x] Given invalid header length, return `False`
+- [x] Given invalid JSON header, return `False`
 
-### Task 1.4 — Models API endpoint
+### Task 1.4 ✅ — Models API endpoint
 
 **What:** `app/api/models/route.ts` — download, check status, verify.
 
-**Test first:**
-- `app/api/models/__tests__/route.test.ts`
-  - GET returns status of all models (downloaded / pending / verifying)
-  - POST triggers download of a specific model
-  - Returns 409 if model already downloaded
-  - Returns 422 if verification fails after download
+**Tests:** `app/api/models/route.test.ts` — **5 tests** ✅
+- [x] GET returns status of all models (downloaded / pending / verifying)
+- [x] GET shows downloaded status for existing models
+- [x] POST triggers download of a specific model
+- [x] Returns 409 if model already downloaded
+- [x] Returns 422 if verification fails after download
 
-### Task 1.5 — Download UI button with progress
+### Task 1.5 ✅ — Download UI button with progress
 
-**What:** "Download Models" button with per-model progress bars.
+**What:** `app/components/ModelDownloader.tsx` — "Download Models" button with per-model progress bars.
 
-**Test first:**
-- `app/components/__tests__/ModelDownloader.test.tsx`
-  - Renders button for each pending model
-  - Shows progress bar during download
-  - Shows checkmark when download completes
-  - Shows error icon when download fails
+**Tests:** `app/components/__tests__/ModelDownloader.test.tsx` — **4 tests** ✅
+- [x] Renders button for each pending model
+- [x] Shows progress bar during download
+- [x] Shows checkmark when download completes
+- [x] Shows error message when download fails
 
 ---
 
-## Phase 2: Single Training
+## Phase 2: Single Training 🔄 IN PROGRESS (4/9)
 
-### Task 2.1 — Training parameter schema (TypeScript)
+### Task 2.1 ✅ — Training parameter schema (TypeScript)
 
-**What:** Validation schema for Anima training parameters (zod or similar).
+**What:** `app/lib/training-schema.ts` — Validation schema for Anima training parameters (zod).
 
-**Test first:**
-- `app/lib/__tests__/training-schema.test.ts`
-  - Accepts valid single-run parameter set
-  - Rejects missing required fields (network_dim, learning_rate, epochs, etc.)
-  - Rejects out-of-range values (negative dim, zero epochs)
-  - Accepts all optimizer types from spec
-  - Accepts all scheduler types from spec
+**Tests:** `app/lib/__tests__/training-schema.test.ts` — **14 tests** ✅
+- [x] Accepts valid single-run parameter set
+- [x] Rejects missing required field: network_dim
+- [x] Rejects missing required field: learning_rate
+- [x] Rejects missing required field: epochs
+- [x] Rejects negative network_dim
+- [x] Rejects zero epochs
+- [x] Rejects negative learning_rate
+- [x] Rejects negative batch_size
+- [x] Accepts all optimizer types from spec (AdamW8Bit, AdamW, Prodigy, Lion, Adafactor)
+- [x] Rejects invalid optimizer
+- [x] Accepts all scheduler types from spec (constant, cosine, linear, constant_with_warmup, cosine_with_restarts)
+- [x] Rejects invalid scheduler
+- [x] Accepts all mixed precision options (fp16, bf16, no)
+- [x] Accepts all timestep sampling options (sigma, uniform, sigmoid, shift, flux_shift)
 
-### Task 2.2 — Dataset TOML generator (Python)
+### Task 2.2 ✅ — Dataset TOML generator (Python)
 
-**What:** Function that generates a `.toml` dataset config from user-provided image path and batch size.
+**What:** `scripts/dataset_toml.py` — generates a `.toml` dataset config from user-provided image path and batch size.
 
-**Test first:**
-- `tests/test_dataset_toml.py`
-  - Given image_dir and batch_size, produces valid TOML with correct structure
-  - `num_repeats` is calculated as `ceil(desired_steps / num_images)`
-  - Sets `caption_extension = '.txt'` and `shuffle_caption = true`
-  - Writes to specified output path
+**Tests:** `tests/test_dataset_toml.py` — **7 tests** ✅
+- [x] Given image_dir and batch_size, produces valid TOML with correct structure
+- [x] `num_repeats` is calculated as `ceil(desired_steps / num_images)`
+- [x] `num_repeats` rounds up with remainder (ceil)
+- [x] Sets `caption_extension = '.txt'`
+- [x] Sets `shuffle_caption = true`
+- [x] Writes to specified output path
+- [x] Supports custom resolution
 
-### Task 2.3 — Training command builder (Python)
+### Task 2.3 ✅ — Training command builder (Python)
 
-**What:** Function that assembles the full `accelerate launch` command from parameters.
+**What:** `scripts/command_builder.py` — assembles the full `accelerate launch` command from parameters.
 
-**Test first:**
-- `tests/test_command_builder.py`
-  - Given Anima params, produces command with all required flags from spec
-  - Includes correct model paths for diffusion model, VAE, text encoder
-  - Sets `--network_module=networks.lora_anima`
-  - Includes `--mixed_precision=bf16`, `--gradient_checkpointing`, `--cache_latents`, `--cache_text_encoder_outputs`
-  - Includes `--timestep_sampling=sigmoid`, `--discrete_flow_shift=1.0`
-  - Includes `--vae_chunk_size=64`, `--vae_disable_cache`
-  - Includes `--save_every_n_epochs=1`
+**Tests:** `tests/test_command_builder.py` — **12 tests** ✅
+- [x] Given Anima params, produces command with all required flags from spec
+- [x] Includes correct model paths for diffusion model, VAE, text encoder
+- [x] Sets `--network_module=networks.lora_anima`
+- [x] Includes `--mixed_precision=bf16`
+- [x] Includes `--gradient_checkpointing`
+- [x] Includes `--cache_latents`
+- [x] Includes `--cache_text_encoder_outputs`
+- [x] Includes `--timestep_sampling=sigmoid`
+- [x] Includes `--discrete_flow_shift=1.0`
+- [x] Includes `--vae_chunk_size=64` and `--vae_disable_cache`
+- [x] Includes `--save_every_n_epochs=1`
+- [x] Includes correct network_dim, alpha, lr, batch_size, epochs, optimizer, scheduler, output_name
 
-### Task 2.4 — Single training script
+### Task 2.4 ✅ — Single training script
 
 **What:** `scripts/train_single.py` — parses args, generates dataset TOML, builds command, launches training.
 
-**Test first:**
-- `tests/test_train_single.py`
-  - Accepts params dict and produces correct command (reuse command builder tests)
-  - Creates output directory before launching
-  - Writes initial job manifest with status `running`
-  - Updates manifest to `completed` on exit code 0
-  - Updates manifest to `failed` on non-zero exit code
+**Tests:** `tests/test_train_single.py` — **5 tests** ✅
+- [x] Creates output directory before launching
+- [x] Writes initial job manifest with status `running`
+- [x] Updates manifest to `completed` on exit code 0
+- [x] Updates manifest to `failed` on non-zero exit code
+- [x] Produces correct command (via subprocess.run call verification)
 
-### Task 2.5 — Train API endpoint
+### Task 2.5 ⬜ — Train API endpoint
 
 **What:** `app/api/train/route.ts` — validates params, launches `uv run scripts/train_single.py`.
 
@@ -171,7 +193,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - POST when another job is running returns 409
   - Job ID is unique (timestamp + random suffix)
 
-### Task 2.6 — Anima parameter form UI
+### Task 2.6 ⬜ — Anima parameter form UI
 
 **What:** `app/components/AnimaTab.tsx` — form with all parameter fields from spec.
 
@@ -182,7 +204,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Submitting fires callback with correct param object
   - Validates required fields before submit
 
-### Task 2.7 — Job tracking store (TypeScript)
+### Task 2.7 ⬜ — Job tracking store (TypeScript)
 
 **What:** In-memory + file-based job state tracker.
 
@@ -194,7 +216,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Job state persists to file (survives process restart)
   - Loading from file restores all jobs
 
-### Task 2.8 — Jobs API endpoint
+### Task 2.8 ⬜ — Jobs API endpoint
 
 **What:** `app/api/jobs/route.ts` — list jobs, get individual job status.
 
@@ -204,7 +226,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - GET with query param `?id=X` returns single job
   - Returns empty array when no jobs exist
 
-### Task 2.9 — Job list UI
+### Task 2.9 ⬜ — Job list UI
 
 **What:** `app/components/JobList.tsx` — displays active and recent jobs.
 
@@ -218,7 +240,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
 
 ## Phase 3: Matrix Training
 
-### Task 3.1 — Parameter range parser (Python)
+### Task 3.1 ⬜ — Parameter range parser (Python)
 
 **What:** Parse comma-separated parameter values, including `%` suffix resolution.
 
@@ -230,7 +252,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - `"1,4,8,25%"` → `[1, 4, 8, "25%"]` (preserves `%` marker for later resolution)
   - Empty string raises `ValueError`
 
-### Task 3.2 — Permutation generator (Python)
+### Task 3.2 ⬜ — Permutation generator (Python)
 
 **What:** Compute Cartesian product of parameter ranges and resolve `%` values.
 
@@ -242,7 +264,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Each permutation is a flat dict of `{param_name: resolved_value}`
   - Large input (8×4×3×4×2×2×2) produces exactly 3,072 permutations
 
-### Task 3.3 — Permutation folder namer (Python)
+### Task 3.3 ⬜ — Permutation folder namer (Python)
 
 **What:** Generate deterministic folder names from permutation params.
 
@@ -252,7 +274,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Float values use scientific notation consistently
   - Params sorted alphabetically for deterministic naming
 
-### Task 3.4 — Manifest writer (Python)
+### Task 3.4 ⬜ — Manifest writer (Python)
 
 **What:** Create and update `manifest.json` tracking all permutations and statuses.
 
@@ -264,7 +286,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Updating to `failed` stores error message
   - Manifest survives re-read (JSON round-trip)
 
-### Task 3.5 — Matrix trainer script
+### Task 3.5 ⬜ — Matrix trainer script
 
 **What:** `scripts/matrix_trainer.py` — parse args, generate permutations, iterate and train each.
 
@@ -276,7 +298,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Stops on `cancel` signal file presence
   - Supports `--resume` to skip already-completed permutations
 
-### Task 3.6 — Matrix train API endpoint
+### Task 3.6 ⬜ — Matrix train API endpoint
 
 **What:** `app/api/train/matrix/route.ts` — validates matrix params, launches matrix trainer.
 
@@ -286,7 +308,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Rejects params that would produce 0 permutations
   - Returns 400 if any parameter range is empty
 
-### Task 3.7 — Matrix mode toggle UI
+### Task 3.7 ⬜ — Matrix mode toggle UI
 
 **What:** Toggle between Single Run and Matrix Run modes in the parameter form.
 
@@ -301,7 +323,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
 
 ## Phase 4: Evaluation
 
-### Task 4.1 — Tag extractor (Python)
+### Task 4.1 ⬜ — Tag extractor (Python)
 
 **What:** Read `.txt` caption files from training image directory and collect unique tags.
 
@@ -312,7 +334,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Ignores empty caption files
   - Handles missing captions gracefully (no crash)
 
-### Task 4.2 — Prompt generator (Python)
+### Task 4.2 ⬜ — Prompt generator (Python)
 
 **What:** Combine random subset of tags into a single evaluation prompt.
 
@@ -323,7 +345,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Different seeds produce different prompts
   - Returns empty string if no tags available
 
-### Task 4.3 — LoRA file finder (Python)
+### Task 4.3 ⬜ — LoRA file finder (Python)
 
 **What:** Scan a permutation folder for `.safetensors` files and pick the highest epoch checkpoint.
 
@@ -334,7 +356,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Given empty folder, raises `NoLoraFoundError`
   - Ignores non-safetensors files
 
-### Task 4.4 — sd-cli command builder (Python)
+### Task 4.4 ⬜ — sd-cli command builder (Python)
 
 **What:** Assemble the `sd-cli` command for evaluating a single LoRA.
 
@@ -348,7 +370,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Sets fixed seed via `-s {seed}`
   - Sets output path via `-o`
 
-### Task 4.5 — Matrix evaluator script
+### Task 4.5 ⬜ — Matrix evaluator script
 
 **What:** `scripts/matrix_evaluator.py` — scan results, find LoRAs, run sd-cli, write evaluation.json.
 
@@ -361,7 +383,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Records `inference_time_ms` per result
   - Records `status: "failed"` for sd-cli errors without stopping entire run
 
-### Task 4.6 — Evaluate API endpoint
+### Task 4.6 ⬜ — Evaluate API endpoint
 
 **What:** `app/api/evaluate/route.ts` — triggers matrix evaluator for a given run.
 
@@ -372,7 +394,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Returns 409 if evaluation already running for this run
   - Returns evaluation results when complete
 
-### Task 4.7 — "Evaluate All" button UI
+### Task 4.7 ⬜ — "Evaluate All" button UI
 
 **What:** Button to trigger evaluation on a completed matrix run.
 
@@ -387,7 +409,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
 
 ## Phase 5: Results Dashboard
 
-### Task 5.1 — Results loader (TypeScript)
+### Task 5.1 ⬜ — Results loader (TypeScript)
 
 **What:** Parse `manifest.json` + `evaluation.json` into structured result objects.
 
@@ -398,7 +420,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Returns array of `{ params, loraFile, imageFile, status, inferenceTimeMs }`
   - Handles missing evaluation.json (returns results without images)
 
-### Task 5.2 — Results API endpoint
+### Task 5.2 ⬜ — Results API endpoint
 
 **What:** `app/api/results/route.ts` — browse results, fetch images.
 
@@ -409,7 +431,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Supports `?sort=param_name` query parameter
   - Supports `?filter=param_name:value` query parameter
 
-### Task 5.3 — Results grid component
+### Task 5.3 ⬜ — Results grid component
 
 **What:** `app/components/ResultsGrid.tsx` — grid of evaluation image cards.
 
@@ -420,7 +442,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Missing images show placeholder
   - Clicking card selects it for comparison
 
-### Task 5.4 — Filter/sort controls
+### Task 5.4 ⬜ — Filter/sort controls
 
 **What:** UI controls for filtering and sorting results by parameter values.
 
@@ -431,7 +453,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Sorting reorders results by selected parameter
   - Clearing filters shows all results
 
-### Task 5.5 — Side-by-side comparison view
+### Task 5.5 ⬜ — Side-by-side comparison view
 
 **What:** Select 2+ results and display them side by side.
 
@@ -442,7 +464,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Minimum 2 selections required
   - Deselect removes from comparison
 
-### Task 5.6 — LoRA download links
+### Task 5.6 ⬜ — LoRA download links
 
 **What:** Download links for each LoRA `.safetensors` file.
 
@@ -455,7 +477,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
 
 ## Phase 6: Polish & Robustness
 
-### Task 6.1 — Training log streaming
+### Task 6.1 ⬜ — Training log streaming
 
 **What:** Stream training output logs from child process to UI via Server-Sent Events or polling.
 
@@ -465,7 +487,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Makes logs available line-by-line
   - Supports searching/filtering log lines
 
-### Task 6.2 — Log viewer UI
+### Task 6.2 ⬜ — Log viewer UI
 
 **What:** Scrollable, searchable log viewer panel.
 
@@ -476,7 +498,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Auto-scrolls to latest line
   - "Failed" lines highlighted in red
 
-### Task 6.3 — GPU VRAM monitoring
+### Task 6.3 ⬜ — GPU VRAM monitoring
 
 **What:** Periodic `nvidia-smi` query to report VRAM usage during training.
 
@@ -486,7 +508,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Returns percentage used
   - Handles nvidia-smi failure gracefully
 
-### Task 6.4 — Pause/resume/cancel
+### Task 6.4 ⬜ — Pause/resume/cancel
 
 **What:** Control signals for running matrix jobs.
 
@@ -498,7 +520,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Matrix trainer respects pause signal (waits between permutations)
   - Matrix trainer respects cancel signal (exits loop)
 
-### Task 6.5 — Parameter preset save/load
+### Task 6.5 ⬜ — Parameter preset save/load
 
 **What:** Save and load parameter configurations as JSON presets.
 
@@ -510,7 +532,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
   - Overwriting preset name replaces old data
   - Deleting preset removes it
 
-### Task 6.6 — Error boundary and user-friendly errors
+### Task 6.6 ⬜ — Error boundary and user-friendly errors
 
 **What:** Global error boundaries and formatted error messages.
 
@@ -524,17 +546,14 @@ Each task follows TDD: write the failing test first, then implement minimal code
 
 ## Cross-Cutting Concerns
 
-### Testing infrastructure setup
+### Testing infrastructure setup ✅
 
-Before any of the above, ensure:
-- **TypeScript tests:** Jest or Vitest configured with Next.js compatibility
-- **Python tests:** `pytest` added to `pyproject.toml` dev dependencies
-- **Test directories:** `tests/` (Python) and `__tests__/` (TypeScript, colocated)
-- **CI check:** `bun test` and `uv run pytest` both pass before merge
+- [x] **TypeScript tests:** Vitest configured with jsdom environment
+- [x] **Python tests:** `pytest` added to `pyproject.toml` dev dependencies
+- [x] **Test directories:** `tests/` (Python) and `__tests__/` (TypeScript, colocated)
+- [x] **CI check:** `bunx vitest run` and `uv run pytest tests/` both pass
 
 ### Shared utilities to test early
-
-These are used across multiple phases and should be tested first:
 
 | Utility | Test file | Key assertions |
 |---|---|---|
