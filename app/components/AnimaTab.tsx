@@ -325,20 +325,7 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
           <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
             Data
           </h3>
-          <div className="grid grid-cols-2 gap-4">
-            {isManagedExternally ? (
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Training Images
-                </label>
-                <div className="px-3 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-md text-sm font-mono text-slate-500 dark:text-slate-400 truncate">
-                  {trainingImagesPath}
-                </div>
-                <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">Set in directory picker above</p>
-              </div>
-            ) : (
-              renderTextInput('Training Images Path', 'trainingImages', '/path/to/images')
-            )}
+          <div className="grid grid-cols-1 gap-4 max-w-sm">
             {renderTextInput('LoRA Name', 'loraName', 'my-lora')}
           </div>
         </section>

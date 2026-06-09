@@ -35,7 +35,6 @@ describe('AnimaTab', () => {
     expect(screen.getByLabelText(/scheduler/i) || screen.getByText(/scheduler/i)).toBeInTheDocument();
 
     // Data
-    expect(screen.getByLabelText(/training images/i) || screen.getByText(/training images/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/lora name/i) || screen.getByText(/lora name/i)).toBeInTheDocument();
 
     // Precision & Sampling
@@ -95,18 +94,13 @@ describe('AnimaTab', () => {
 
   it('submitting fires callback with correct param object', async () => {
     const AnimaTab = await importAnimaTab();
-    render(<AnimaTab onSubmit={mockOnSubmit} />);
+    render(<AnimaTab onSubmit={mockOnSubmit} trainingImagesPath="/path/to/images" />);
 
     await waitFor(() => {
       expect(screen.getByText(/Anima Training Parameters/i)).toBeInTheDocument();
     });
 
     // Fill in required text fields
-    const imagesInput = screen.getByLabelText(/training images/i);
-    if (imagesInput.tagName === 'INPUT') {
-      fireEvent.change(imagesInput, { target: { value: '/path/to/images' } });
-    }
-
     const nameInput = screen.getByLabelText(/lora name/i);
     if (nameInput.tagName === 'INPUT') {
       fireEvent.change(nameInput, { target: { value: 'my-lora' } });
