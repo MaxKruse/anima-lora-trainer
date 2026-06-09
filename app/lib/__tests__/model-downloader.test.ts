@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { spawn } from 'child_process';
 
-// Mock spawn
+// Mock child_process
 const mockSpawn = vi.fn();
+const mockExecSync = vi.fn();
 vi.mock('child_process', () => ({
   spawn: mockSpawn,
-  execSync: vi.fn(),
-  default: { spawn: mockSpawn, execSync: vi.fn() },
+  execSync: mockExecSync,
+  default: { spawn: mockSpawn, execSync: mockExecSync },
 }));
 
 vi.mock('fs', () => ({
@@ -14,10 +14,30 @@ vi.mock('fs', () => ({
     existsSync: vi.fn(() => false),
     statSync: vi.fn(() => ({ size: 0 })),
     mkdirSync: vi.fn(),
+    mkdtempSync: vi.fn(() => '/tmp/hf-dl-test'),
+    writeFileSync: vi.fn(),
+    unlinkSync: vi.fn(),
+    rmdirSync: vi.fn(),
   },
   existsSync: vi.fn(() => false),
   statSync: vi.fn(() => ({ size: 0 })),
   mkdirSync: vi.fn(),
+  mkdtempSync: vi.fn(() => '/tmp/hf-dl-test'),
+  writeFileSync: vi.fn(),
+  unlinkSync: vi.fn(),
+  rmdirSync: vi.fn(),
+}));
+
+vi.mock('os', () => ({
+  default: { tmpdir: () => '/tmp' },
+  tmpdir: () => '/tmp',
+}));
+
+vi.mock('path', () => ({
+  default: {
+    join: (...args: string[]) => args.join('/'),
+  },
+  join: (...args: string[]) => args.join('/'),
 }));
 
 async function importDownloader() {
@@ -25,14 +45,23 @@ async function importDownloader() {
 }
 
 function createMockProcess(
-  stdoutData: string,
+  stdoutLines: string[],
   stderrData: string,
-  exitCode: number
+  exitCode: number,
+  delayMs = 0
 ) {
   return {
     stdout: {
       on: (event: string, cb: (data: Buffer) => void) => {
-        if (event === 'data' && stdoutData) cb(Buffer.from(stdoutData));
+        if (event === 'data') {
+          const timer = setTimeout(() => {
+            for (const line of stdoutLines) {
+              cb(Buffer.from(line + '\n'));
+            }
+          }, delayMs);
+          // Store timer for cleanup
+          (cb as any)._timer = timer;
+        }
       },
       removeAllListeners: () => {},
     },
@@ -43,7 +72,9 @@ function createMockProcess(
       removeAllListeners: () => {},
     },
     on: (event: string, cb: (code: number | null) => void) => {
-      if (event === 'close') cb(exitCode);
+      if (event === 'close') {
+        setTimeout(() => cb(exitCode), delayMs + 10);
+      }
     },
     kill: vi.fn(),
   };
@@ -54,9 +85,9 @@ describe('downloadModel', () => {
     vi.clearAllMocks();
   });
 
-  it('calls hf with correct args (no --local-dir, uses --quiet)', async () => {
+  it('spawns Python with hf_hub_download script', async () => {
     mockSpawn.mockReturnValueOnce(
-      createMockProcess('', '', 0)
+      createMockProcess(['{"type": "progress", "percent": 100}', '{"type": "done", "path": "/cached/file"}'], '', 0)
     );
 
     const { downloadModel } = await importDownloader();
@@ -65,7 +96,6 @@ describe('downloadModel', () => {
       name: 'diffusion_model',
       hfRepo: 'circlestone-labs/Anima',
       hfFile: 'split_files/diffusion_models/anima-base-v1.0.safetensors',
-      expectedSizeBytes: 4_180_000_000,
     });
 
     expect(mockSpawn).toHaveBeenCalled();
@@ -73,19 +103,21 @@ describe('downloadModel', () => {
     const cmd = callArgs[0] as string;
     const args = callArgs[1] as string[];
 
-    expect(cmd).toBe('hf');
-    expect(args).toContain('download');
+    expect(cmd).toBe('python');
     expect(args).toContain('circlestone-labs/Anima');
     expect(args).toContain('split_files/diffusion_models/anima-base-v1.0.safetensors');
-    expect(args).toContain('--quiet');
-    expect(args).not.toContain('--local-dir');
   });
 
-  it('reports progress as download completes', async () => {
+  it('reports progress from Python stdout JSON lines', async () => {
     const progressCallback = vi.fn();
 
     mockSpawn.mockReturnValueOnce(
-      createMockProcess('', '', 0)
+      createMockProcess([
+        '{"type": "progress", "percent": 10}',
+        '{"type": "progress", "percent": 50}',
+        '{"type": "progress", "percent": 100}',
+        '{"type": "done", "path": "/cached/file"}',
+      ], '', 0)
     );
 
     const { downloadModel } = await importDownloader();
@@ -94,21 +126,26 @@ describe('downloadModel', () => {
       name: 'vae',
       hfRepo: 'circlestone-labs/Anima',
       hfFile: 'split_files/vae/qwen_image_vae.safetensors',
-      expectedSizeBytes: 254_000_000,
     }, progressCallback);
 
-    // Should report 100% on success
+    // Should report progress updates
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'vae', status: 'downloading', progress: 10 })
+    );
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'vae', status: 'downloading', progress: 50 })
+    );
+    // Final completion
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'completed' })
     );
   });
 
-  it('retries on transient network error up to 3 attempts', async () => {
-    // First two attempts fail, third succeeds
+  it('retries on transient error up to 3 attempts', async () => {
     mockSpawn
-      .mockReturnValueOnce(createMockProcess('', 'network error', 1))
-      .mockReturnValueOnce(createMockProcess('', 'network error', 1))
-      .mockReturnValueOnce(createMockProcess('', '', 0));
+      .mockReturnValueOnce(createMockProcess(['{"type": "error", "message": "network error"}'], '', 1))
+      .mockReturnValueOnce(createMockProcess(['{"type": "error", "message": "network error"}'], '', 1))
+      .mockReturnValueOnce(createMockProcess(['{"type": "progress", "percent": 100}', '{"type": "done", "path": "/cached"}'], '', 0));
 
     const { downloadModel } = await importDownloader();
 
@@ -116,7 +153,6 @@ describe('downloadModel', () => {
       name: 'text_encoder',
       hfRepo: 'circlestone-labs/Anima',
       hfFile: 'split_files/text_encoders/qwen_3_06b_base.safetensors',
-      expectedSizeBytes: 1_200_000_000,
     })).resolves.not.toThrow();
 
     expect(mockSpawn).toHaveBeenCalledTimes(3);
@@ -124,9 +160,9 @@ describe('downloadModel', () => {
 
   it('throws after 3 failed attempts', async () => {
     mockSpawn
-      .mockReturnValueOnce(createMockProcess('', 'network error', 1))
-      .mockReturnValueOnce(createMockProcess('', 'network error', 1))
-      .mockReturnValueOnce(createMockProcess('', 'network error', 1));
+      .mockReturnValueOnce(createMockProcess(['{"type": "error", "message": "network error"}'], '', 1))
+      .mockReturnValueOnce(createMockProcess(['{"type": "error", "message": "network error"}'], '', 1))
+      .mockReturnValueOnce(createMockProcess(['{"type": "error", "message": "network error"}'], '', 1));
 
     const { downloadModel } = await importDownloader();
 
@@ -134,7 +170,6 @@ describe('downloadModel', () => {
       name: 'vae',
       hfRepo: 'circlestone-labs/Anima',
       hfFile: 'split_files/vae/qwen_image_vae.safetensors',
-      expectedSizeBytes: 254_000_000,
     })).rejects.toThrow();
 
     expect(mockSpawn).toHaveBeenCalledTimes(3);

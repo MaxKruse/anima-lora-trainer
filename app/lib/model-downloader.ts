@@ -1,6 +1,8 @@
 import { spawn, execSync } from 'child_process';
 import { ModelEntry } from './model-manifest';
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 export interface DownloadProgress {
   model: string;
@@ -40,8 +42,63 @@ if isinstance(result, str):
 }
 
 /**
+ * Python script that downloads a file via hf_hub_download and reports progress on stdout as JSON lines.
+ * Each line: {"type": "progress", "percent": 42} or {"type": "done", "path": "..."} or {"type": "error", "message": "..."}
+ */
+const DOWNLOAD_SCRIPT = `
+import sys, json, os
+from huggingface_hub import hf_hub_download
+
+class ProgressTqdm:
+    """Custom tqdm that reports progress as JSON lines on stdout."""
+    def __init__(self, total=None, unit=None, unit_scale=None, desc=None, **kwargs):
+        self.total = total
+        self.n = 0
+        self.last_reported = -1
+
+    def update(self, n=1):
+        self.n += n
+        if self.total and self.total > 0:
+            pct = min(int((self.n / self.total) * 100), 100)
+            if pct != self.last_reported:
+                self.last_reported = pct
+                json.dump({"type": "progress", "percent": pct}, sys.stdout)
+                sys.stdout.write("\\n")
+                sys.stdout.flush()
+
+    def close(self):
+        # Ensure 100% is reported if we reached the end
+        if self.total and self.total > 0 and self.last_reported < 100:
+            json.dump({"type": "progress", "percent": 100}, sys.stdout)
+            sys.stdout.write("\\n")
+            sys.stdout.flush()
+
+    def set_description(self, desc=None):
+        pass
+
+repo_id = sys.argv[1]
+filename = sys.argv[2]
+
+try:
+    path = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        repo_type="model",
+        tqdm_class=ProgressTqdm,
+    )
+    json.dump({"type": "done", "path": path}, sys.stdout)
+    sys.stdout.write("\\n")
+    sys.stdout.flush()
+except Exception as e:
+    json.dump({"type": "error", "message": str(e)}, sys.stdout)
+    sys.stdout.write("\\n")
+    sys.stdout.flush()
+    sys.exit(1)
+`;
+
+/**
  * Download a model file to the global HF cache.
- * Uses `hf download` without --local-dir so files land in ~/.cache/huggingface/hub.
+ * Uses Python's hf_hub_download directly for reliable progress reporting.
  */
 export async function downloadModel(
   entry: ModelEntry,
@@ -84,13 +141,13 @@ export async function downloadModel(
     });
 
     try {
-      console.log(`[download] Spawning: hf download ${hfRepo} ${hfFile} --quiet`);
+      console.log(`[download] Spawning Python hf_hub_download for ${entry.name}`);
 
-      await runHuggingfaceDownload(hfRepo, hfFile, abortSignal, (progress) => {
+      await runPythonDownload(hfRepo, hfFile, abortSignal, (progress) => {
         onProgress?.({ ...progress, model: entry.name });
       });
 
-      console.log(`[download] hf process exited successfully for ${entry.name}`);
+      console.log(`[download] Python download completed for ${entry.name}`);
 
       // Resolve the cached path after download
       const resolvedPath = resolveCachePath(hfRepo, hfFile);
@@ -98,7 +155,7 @@ export async function downloadModel(
         const stat = fs.statSync(resolvedPath);
         console.log(`[download] Resolved cache path: ${resolvedPath}, size=${stat.size} bytes`);
       } else {
-        console.error(`[download] WARNING: hf exited 0 but could not resolve cache path!`);
+        console.error(`[download] WARNING: download succeeded but could not resolve cache path!`);
       }
 
       onProgress?.({
@@ -133,94 +190,113 @@ export async function downloadModel(
   }
 }
 
-function runHuggingfaceDownload(
+function runPythonDownload(
   repo: string,
   file: string,
   signal?: AbortSignal,
   onProgress?: (progress: DownloadProgress) => void
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    console.log(`[hf:spawn] Spawning: hf download ${repo} ${file} --quiet`);
+    console.log(`[py:spawn] Spawning: python <script> ${repo} ${file}`);
 
-    // Force UTF-8 encoding for Python's stdout/stderr — fixes Windows cp1252
-    // "charmap codec can't encode character '\u2713'" crash from hf CLI progress output
-    // Disable HF hub's own progress bars so we parse stderr ourselves
+    // Force UTF-8 and unbuffered output so progress JSON lines arrive in real-time
     const spawnEnv = {
       ...process.env,
       PYTHONIOENCODING: 'utf-8',
-      HF_HUB_DISABLE_PROGRESS_BARS: 'false', // We want progress in stderr for parsing
+      PYTHONUNBUFFERED: '1',
     };
 
-    // Use --quiet so stdout is just the cached file path (no extra messages)
-    // Progress/tqdm output goes to stderr which we parse
-    const proc = spawn(
-      'hf',
-      ['download', repo, file, '--quiet'],
-      { shell: false, env: spawnEnv }
-    );
+    // Write the script to a temp file to avoid shell escaping issues
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hf-dl-'));
+    const scriptFile = path.join(tmpDir, 'download.py');
+    fs.writeFileSync(scriptFile, DOWNLOAD_SCRIPT, 'utf-8');
 
-    console.log(`[hf:spawn] Process spawned, pid=${proc.pid}`);
-
-    let stderr = '';
-    let stdout = '';
-    let lastReportedProgress = -1;
-
-    proc.stdout.on('data', (data) => {
-      const chunk = data.toString();
-      stdout += chunk;
+    const proc = spawn('python', [scriptFile, repo, file], {
+      shell: false,
+      env: spawnEnv,
     });
 
-    proc.stderr.on('data', (data) => {
+    console.log(`[py:spawn] Process spawned, pid=${proc.pid}`);
+
+    let stderr = '';
+    let lastReportedProgress = -1;
+    let buffer = '';
+
+    // Progress JSON lines come on stdout
+    proc.stdout.on('data', (data) => {
       const chunk = data.toString();
-      stderr += chunk;
+      buffer += chunk;
 
-      // Strip ANSI escape codes and \r for progress parsing
-      const cleaned = chunk.replace(/\x1b\[[0-9;]*m/g, '').replace(/\r/g, '');
+      // Split on newline characters
+      const parts = buffer.split(/\r?\n/);
+      // Keep the last (possibly incomplete) part in the buffer
+      buffer = parts.pop() || '';
 
-      // Parse tqdm-style progress: "Downloading files: 42%|██████ | 1.20G/3.50G"
-      const progressMatch = cleaned.match(/(\d+)%/);
-      if (progressMatch) {
-        const progress = parseInt(progressMatch[1], 10);
-        if (progress !== lastReportedProgress && progress <= 100) {
-          lastReportedProgress = progress;
-          console.log(`[hf:progress] ${progress}%`);
-          onProgress?.({
-            model: '', // caller sets model name
-            status: 'downloading',
-            progress,
-          });
+      for (const line of parts) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        try {
+          const msg = JSON.parse(trimmed);
+
+          if (msg.type === 'progress') {
+            const pct = msg.percent;
+            if (pct !== lastReportedProgress && pct <= 100) {
+              lastReportedProgress = pct;
+              console.log(`[py:progress] ${pct}%`);
+              onProgress?.({
+                model: '',
+                status: 'downloading',
+                progress: pct,
+              });
+            }
+          } else if (msg.type === 'done') {
+            console.log(`[py:done] File cached at: ${msg.path}`);
+          } else if (msg.type === 'error') {
+            console.error(`[py:error] ${msg.message}`);
+            reject(new Error(msg.message));
+            return;
+          }
+        } catch {
+          // Not a JSON line, ignore
         }
       }
     });
 
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
     proc.on('close', (code) => {
-      console.log(`[hf:close] Process exited with code=${code}`);
-      if (stdout.trim()) {
-        console.log(`[hf:close] stdout (cache path): ${stdout.trim()}`);
-      }
+      console.log(`[py:close] Process exited with code=${code}`);
       if (stderr) {
-        console.log(`[hf:close] Full stderr (${stderr.length} chars): ${stderr.replace(/\n/g, ' | ').slice(0, 200)}`);
+        console.log(`[py:close] stderr (${stderr.length} chars): ${stderr.slice(0, 200)}`);
       }
 
       if (code === 0) {
-        console.log(`[hf:close] Success — resolving`);
+        console.log(`[py:close] Success — resolving`);
+        // Clean up script file
+        try { fs.unlinkSync(scriptFile); fs.rmdirSync(tmpDir); } catch { /* ignore */ }
         resolve();
       } else {
-        const errMsg = stderr || `hf exited with code ${code}`;
-        console.error(`[hf:close] FAILURE — rejecting with: ${errMsg}`);
+        const errMsg = stderr || `Python download exited with code ${code}`;
+        console.error(`[py:close] FAILURE — rejecting with: ${errMsg}`);
+        try { fs.unlinkSync(scriptFile); fs.rmdirSync(tmpDir); } catch { /* ignore */ }
         reject(new Error(errMsg));
       }
     });
 
     proc.on('error', (err) => {
-      console.error(`[hf:error] Spawn error: ${err.message || err}`);
+      console.error(`[py:error] Spawn error: ${err.message || err}`);
+      try { fs.unlinkSync(scriptFile); fs.rmdirSync(tmpDir); } catch { /* ignore */ }
       reject(err);
     });
 
     if (signal) {
       signal.addEventListener('abort', () => {
-        console.log(`[hf:abort] Aborting hf process pid=${proc.pid}`);
+        console.log(`[py:abort] Aborting Python process pid=${proc.pid}`);
         proc.kill();
+        try { fs.unlinkSync(scriptFile); fs.rmdirSync(tmpDir); } catch { /* ignore */ }
         reject(new Error('Download aborted'));
       });
     }
@@ -231,7 +307,7 @@ function runHuggingfaceDownload(
  * Check if a model file exists in the HF cache.
  * Returns cache info if found, or { exists: false } if not.
  */
-export async function checkModelStatus(entry: ModelEntry): Promise<{
+export async function checkModelStatus(entry: ModelEntry & { expectedSizeBytes?: number }): Promise<{
   exists: boolean;
   sizeBytes?: number;
   downloadPercent?: number;
@@ -245,11 +321,12 @@ export async function checkModelStatus(entry: ModelEntry): Promise<{
 
   if (cachedPath) {
     const stat = fs.statSync(cachedPath);
-    const percent = entry.expectedSizeBytes > 0
-      ? Math.round((stat.size / entry.expectedSizeBytes) * 100)
+    const expectedSize = entry.expectedSizeBytes ?? 0;
+    const percent = expectedSize > 0
+      ? Math.round((stat.size / expectedSize) * 100)
       : 0;
     console.log(`[status]   Cached at: ${cachedPath}`);
-    console.log(`[status]   size=${stat.size} bytes, expected=${entry.expectedSizeBytes} bytes, percent=${Math.min(percent, 100)}%`);
+    console.log(`[status]   size=${stat.size} bytes, expected=${expectedSize} bytes, percent=${Math.min(percent, 100)}%`);
     return {
       exists: true,
       sizeBytes: stat.size,
