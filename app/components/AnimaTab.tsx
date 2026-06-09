@@ -205,16 +205,6 @@ export function AnimaTab({ onSubmit, onMatrixSubmit, onPermutationCountChange, t
         return;
       }
 
-      // Show confirmation
-      const estimatedHours = Math.round(permutationCount * 15 / 60 * 10) / 10;
-      const message = `Start matrix training "${params.loraName}"?
-
-${permutationCount} training permutations
-Estimated time: ~${estimatedHours} hours
-This will use your GPU exclusively.`;
-
-      if (!confirm(message)) return;
-
       setSubmitting(true);
       try {
         // Build paramRanges from matrixValues
@@ -259,26 +249,6 @@ This will use your GPU exclusively.`;
       }
       return;
     }
-
-    // Single mode: show confirmation before starting
-    const minutesPerEpoch = 15;
-    const totalMinutes = params.epochs * minutesPerEpoch;
-    const estimatedTime = totalMinutes < 60
-      ? `~${totalMinutes} minutes`
-      : `~${Math.round(totalMinutes / 60)} hours ${totalMinutes % 60} minutes`;
-
-    const message = `Start training "${params.loraName}"?
-
-Parameters:
-  Dim: ${params.networkDim}  Alpha: ${params.networkAlpha}
-  LR: ${params.learningRate}  Batch: ${params.batchSize}
-  Epochs: ${params.epochs}  Resolution: ${params.resolution}px
-  Optimizer: ${params.optimizer}  Scheduler: ${params.scheduler}
-
-Estimated time: ${estimatedTime}
-This will use your GPU exclusively.`;
-
-    if (!confirm(message)) return;
 
     setSubmitting(true);
     try {
