@@ -1,5 +1,5 @@
-import { spawn, execSync } from 'child_process';
-import { ModelEntry } from './model-manifest';
+import { spawn } from 'child_process';
+import { ModelEntry, ResolvedModelEntry } from './model-manifest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -8,97 +8,140 @@ export interface DownloadProgress {
   model: string;
   status: 'started' | 'downloading' | 'completed' | 'failed';
   progress?: number;    // 0-100
+  downloaded?: number;  // bytes downloaded so far
   message?: string;
   error?: string;
 }
 
 const MAX_RETRIES = 3;
+const MODELS_DIR = path.join(process.cwd(), 'models');
 
 /**
- * Resolve the cached file path using Python's huggingface_hub library.
- * Returns the path if the file is cached, or null if not found.
- */
-export function resolveCachePath(repo: string, file: string): string | null {
-  const script = `
-import sys
-from huggingface_hub import try_to_load_from_cache
-result = try_to_load_from_cache("${repo}", "${file}", repo_type="model")
-if isinstance(result, str):
-    print(result, end="")
-`;
-
-  try {
-    const output = execSync('python -c ' + JSON.stringify(script), {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'], // suppress stderr
-    }).trim();
-    if (output && fs.existsSync(output)) {
-      return output;
-    }
-  } catch {
-    // File not cached or Python not available
-  }
-  return null;
-}
-
-/**
- * Python script that downloads a file via hf_hub_download and reports progress on stdout as JSON lines.
- * Each line: {"type": "progress", "percent": 42} or {"type": "done", "path": "..."} or {"type": "error", "message": "..."}
+ * Python script that downloads a file from HuggingFace via direct HTTP.
+ * Reports progress on stdout as JSON lines, debug on stderr.
  */
 const DOWNLOAD_SCRIPT = `
-import sys, json, os
-from huggingface_hub import hf_hub_download
+import sys, json, os, urllib.request, urllib.error
 
-class ProgressTqdm:
-    """Custom tqdm that reports progress as JSON lines on stdout."""
-    def __init__(self, total=None, unit=None, unit_scale=None, desc=None, **kwargs):
-        self.total = total
-        self.n = 0
-        self.last_reported = -1
+def log(msg):
+    print(f"[dl] {msg}", file=sys.stderr, flush=True)
 
-    def update(self, n=1):
-        self.n += n
-        if self.total and self.total > 0:
-            pct = min(int((self.n / self.total) * 100), 100)
-            if pct != self.last_reported:
-                self.last_reported = pct
-                json.dump({"type": "progress", "percent": pct}, sys.stdout)
-                sys.stdout.write("\\n")
-                sys.stdout.flush()
+def report(obj):
+    json.dump(obj, sys.stdout)
+    sys.stdout.write("\\n")
+    sys.stdout.flush()
 
-    def close(self):
-        # Ensure 100% is reported if we reached the end
-        if self.total and self.total > 0 and self.last_reported < 100:
-            json.dump({"type": "progress", "percent": 100}, sys.stdout)
-            sys.stdout.write("\\n")
-            sys.stdout.flush()
+url = sys.argv[1]
+dest = sys.argv[2]
 
-    def set_description(self, desc=None):
-        pass
+log(f"Downloading to: {dest}")
 
-repo_id = sys.argv[1]
-filename = sys.argv[2]
+# Ensure destination directory exists
+os.makedirs(os.path.dirname(dest), exist_ok=True)
+
+# Remove partial file from previous failed attempt
+if os.path.exists(dest):
+    log(f"Removing existing partial file: {dest}")
+    os.remove(dest)
 
 try:
-    path = hf_hub_download(
-        repo_id=repo_id,
-        filename=filename,
-        repo_type="model",
-        tqdm_class=ProgressTqdm,
-    )
-    json.dump({"type": "done", "path": path}, sys.stdout)
-    sys.stdout.write("\\n")
-    sys.stdout.flush()
+    req = urllib.request.Request(url)
+    # Add a User-Agent to avoid 403 from HF
+    req.add_header('User-Agent', 'lora-matrix-trainer/1.0')
+    
+    response = urllib.request.urlopen(req, timeout=30)
+    total = int(response.headers.get('Content-Length', 0))
+    log(f"Content-Length: {total}")
+    
+    report({"type": "start", "total": total})
+    
+    downloaded = 0
+    chunk_size = 8 * 1024 * 1024  # 8MB chunks
+    
+    with open(dest, 'wb') as f:
+        while True:
+            chunk = response.read(chunk_size)
+            if not chunk:
+                break
+            downloaded += len(chunk)
+            f.write(chunk)
+            
+            pct = 0
+            if total > 0:
+                pct = min(int((downloaded / total) * 100), 100)
+            
+            report({"type": "progress", "percent": pct, "downloaded": downloaded})
+    
+    log(f"Download complete: {downloaded} bytes")
+    report({"type": "done", "path": dest, "size": downloaded})
+except urllib.error.HTTPError as e:
+    msg = f"HTTP {e.code}: {e.reason}"
+    log(f"ERROR: {msg}")
+    report({"type": "error", "message": msg})
+    sys.exit(1)
+except urllib.error.URLError as e:
+    msg = f"URL error: {e.reason}"
+    log(f"ERROR: {msg}")
+    report({"type": "error", "message": msg})
+    sys.exit(1)
 except Exception as e:
-    json.dump({"type": "error", "message": str(e)}, sys.stdout)
-    sys.stdout.write("\\n")
-    sys.stdout.flush()
+    msg = f"{type(e).__name__}: {e}"
+    log(f"ERROR: {msg}")
+    report({"type": "error", "message": msg})
     sys.exit(1)
 `;
 
 /**
- * Download a model file to the global HF cache.
- * Uses Python's hf_hub_download directly for reliable progress reporting.
+ * Build the direct download URL for a HuggingFace file.
+ */
+function buildHfDownloadUrl(repo: string, file: string): string {
+  return `https://huggingface.co/${repo}/resolve/main/${file}`;
+}
+
+/**
+ * Get the local path where a model file should be stored.
+ */
+function getLocalPath(entry: ModelEntry): string {
+  // Extract just the filename from the HF path
+  const fileName = path.basename(entry.hfFile);
+  return path.join(MODELS_DIR, entry.name, fileName);
+}
+
+/**
+ * Check if a model file exists locally.
+ */
+export function checkLocalModel(entry: ModelEntry & { expectedSizeBytes?: number }): {
+  exists: boolean;
+  sizeBytes?: number;
+  downloadPercent?: number;
+  localPath?: string;
+} {
+  const localPath = getLocalPath(entry);
+  
+  if (fs.existsSync(localPath)) {
+    const stat = fs.statSync(localPath);
+    const expectedSize = entry.expectedSizeBytes ?? 0;
+    const percent = expectedSize > 0
+      ? Math.round((stat.size / expectedSize) * 100)
+      : 0;
+    
+    console.log(`[status]   Local: ${localPath}`);
+    console.log(`[status]   size=${stat.size} bytes, expected=${expectedSize} bytes, percent=${Math.min(percent, 100)}%`);
+    
+    return {
+      exists: true,
+      sizeBytes: stat.size,
+      downloadPercent: Math.min(percent, 100),
+      localPath,
+    };
+  }
+  
+  console.log(`[status]   NOT found locally`);
+  return { exists: false };
+}
+
+/**
+ * Download a model file to the local models directory.
  */
 export async function downloadModel(
   entry: ModelEntry,
@@ -106,25 +149,15 @@ export async function downloadModel(
   abortSignal?: AbortSignal
 ): Promise<void> {
   const { hfRepo, hfFile } = entry;
+  const url = buildHfDownloadUrl(hfRepo, hfFile);
+  const localPath = getLocalPath(entry);
 
   console.log(`[download] === downloadModel START: ${entry.name} ===`);
-  console.log(`[download]   hfRepo=${hfRepo}`);
-  console.log(`[download]   hfFile=${hfFile}`);
+  console.log(`[download]   url=${url}`);
+  console.log(`[download]   dest=${localPath}`);
 
-  // Check if already cached
-  const cachedPath = resolveCachePath(hfRepo, hfFile);
-  if (cachedPath) {
-    const stat = fs.statSync(cachedPath);
-    console.log(`[download] File already cached at ${cachedPath}, size=${stat.size} bytes`);
-    onProgress?.({
-      model: entry.name,
-      status: 'completed',
-      progress: 100,
-      message: `Already cached: ${entry.name}`,
-    });
-    console.log(`[download] === downloadModel SUCCESS (cached): ${entry.name} ===`);
-    return;
-  }
+  // Ensure models directory exists
+  fs.mkdirSync(MODELS_DIR, { recursive: true });
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     console.log(`[download] Attempt ${attempt}/${MAX_RETRIES} for ${entry.name}`);
@@ -141,21 +174,19 @@ export async function downloadModel(
     });
 
     try {
-      console.log(`[download] Spawning Python hf_hub_download for ${entry.name}`);
+      console.log(`[download] Spawning Python HTTP download for ${entry.name}`);
 
-      await runPythonDownload(hfRepo, hfFile, abortSignal, (progress) => {
+      const downloadedPath = await runPythonDownload(url, localPath, abortSignal, (progress) => {
         onProgress?.({ ...progress, model: entry.name });
       });
 
       console.log(`[download] Python download completed for ${entry.name}`);
 
-      // Resolve the cached path after download
-      const resolvedPath = resolveCachePath(hfRepo, hfFile);
-      if (resolvedPath) {
-        const stat = fs.statSync(resolvedPath);
-        console.log(`[download] Resolved cache path: ${resolvedPath}, size=${stat.size} bytes`);
+      if (downloadedPath && fs.existsSync(downloadedPath)) {
+        const stat = fs.statSync(downloadedPath);
+        console.log(`[download] Downloaded file: ${downloadedPath}, size=${stat.size} bytes`);
       } else {
-        console.error(`[download] WARNING: download succeeded but could not resolve cache path!`);
+        console.error(`[download] WARNING: download succeeded but file not found at ${downloadedPath}!`);
       }
 
       onProgress?.({
@@ -191,27 +222,25 @@ export async function downloadModel(
 }
 
 function runPythonDownload(
-  repo: string,
-  file: string,
+  url: string,
+  dest: string,
   signal?: AbortSignal,
   onProgress?: (progress: DownloadProgress) => void
-): Promise<void> {
+): Promise<string | null> {
   return new Promise((resolve, reject) => {
-    console.log(`[py:spawn] Spawning: python <script> ${repo} ${file}`);
+    console.log(`[py:spawn] Spawning: python <script> ${url} ${dest}`);
 
-    // Force UTF-8 and unbuffered output so progress JSON lines arrive in real-time
     const spawnEnv = {
       ...process.env,
       PYTHONIOENCODING: 'utf-8',
-      PYTHONUNBUFFERED: '1',
     };
 
-    // Write the script to a temp file to avoid shell escaping issues
+    // Write the script to a temp file
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hf-dl-'));
     const scriptFile = path.join(tmpDir, 'download.py');
     fs.writeFileSync(scriptFile, DOWNLOAD_SCRIPT, 'utf-8');
 
-    const proc = spawn('python', [scriptFile, repo, file], {
+    const proc = spawn('python', [scriptFile, url, dest], {
       shell: false,
       env: spawnEnv,
     });
@@ -219,17 +248,16 @@ function runPythonDownload(
     console.log(`[py:spawn] Process spawned, pid=${proc.pid}`);
 
     let stderr = '';
-    let lastReportedProgress = -1;
+    let lastReportedPct = -1;
+    let lastReportedBytes = -1;
     let buffer = '';
+    let downloadedPath: string | null = null;
 
-    // Progress JSON lines come on stdout
     proc.stdout.on('data', (data) => {
       const chunk = data.toString();
       buffer += chunk;
 
-      // Split on newline characters
       const parts = buffer.split(/\r?\n/);
-      // Keep the last (possibly incomplete) part in the buffer
       buffer = parts.pop() || '';
 
       for (const line of parts) {
@@ -241,21 +269,35 @@ function runPythonDownload(
 
           if (msg.type === 'progress') {
             const pct = msg.percent;
-            if (pct !== lastReportedProgress && pct <= 100) {
-              lastReportedProgress = pct;
-              console.log(`[py:progress] ${pct}%`);
+            const downloaded = msg.downloaded;
+            const pctChanged = pct !== lastReportedPct;
+            const bytesChanged = downloaded !== undefined && downloaded !== lastReportedBytes;
+            
+            if (pctChanged && pct <= 100) {
+              lastReportedPct = pct;
+            }
+            if (bytesChanged) {
+              lastReportedBytes = downloaded!;
+            }
+            if (pctChanged || bytesChanged) {
+              const mb = downloaded != null ? (downloaded / 1024 / 1024).toFixed(1) : 'n/a';
+              console.log(`[py:progress] ${pct}% (${mb}MB)`);
               onProgress?.({
                 model: '',
                 status: 'downloading',
                 progress: pct,
+                downloaded: downloaded ?? undefined,
               });
             }
           } else if (msg.type === 'done') {
-            console.log(`[py:done] File cached at: ${msg.path}`);
+            console.log(`[py:done] File saved to: ${msg.path}`);
+            downloadedPath = msg.path || null;
           } else if (msg.type === 'error') {
             console.error(`[py:error] ${msg.message}`);
             reject(new Error(msg.message));
             return;
+          } else if (msg.type === 'start') {
+            console.log(`[py:start] Total size: ${msg.total} bytes`);
           }
         } catch {
           // Not a JSON line, ignore
@@ -264,23 +306,21 @@ function runPythonDownload(
     });
 
     proc.stderr.on('data', (data) => {
+      const msg = data.toString().trim();
+      if (msg) console.log(`[py:stderr] ${msg}`);
       stderr += data.toString();
     });
 
     proc.on('close', (code) => {
       console.log(`[py:close] Process exited with code=${code}`);
-      if (stderr) {
-        console.log(`[py:close] stderr (${stderr.length} chars): ${stderr.slice(0, 200)}`);
-      }
 
       if (code === 0) {
         console.log(`[py:close] Success — resolving`);
-        // Clean up script file
         try { fs.unlinkSync(scriptFile); fs.rmdirSync(tmpDir); } catch { /* ignore */ }
-        resolve();
+        resolve(downloadedPath);
       } else {
         const errMsg = stderr || `Python download exited with code ${code}`;
-        console.error(`[py:close] FAILURE — rejecting with: ${errMsg}`);
+        console.error(`[py:close] FAILURE — ${errMsg.slice(0, 300)}`);
         try { fs.unlinkSync(scriptFile); fs.rmdirSync(tmpDir); } catch { /* ignore */ }
         reject(new Error(errMsg));
       }
@@ -301,40 +341,4 @@ function runPythonDownload(
       });
     }
   });
-}
-
-/**
- * Check if a model file exists in the HF cache.
- * Returns cache info if found, or { exists: false } if not.
- */
-export async function checkModelStatus(entry: ModelEntry & { expectedSizeBytes?: number }): Promise<{
-  exists: boolean;
-  sizeBytes?: number;
-  downloadPercent?: number;
-  cachePath?: string;
-}> {
-  const cachedPath = resolveCachePath(entry.hfRepo, entry.hfFile);
-
-  console.log(`[status] checkModelStatus: ${entry.name}`);
-  console.log(`[status]   hfRepo=${entry.hfRepo}`);
-  console.log(`[status]   hfFile=${entry.hfFile}`);
-
-  if (cachedPath) {
-    const stat = fs.statSync(cachedPath);
-    const expectedSize = entry.expectedSizeBytes ?? 0;
-    const percent = expectedSize > 0
-      ? Math.round((stat.size / expectedSize) * 100)
-      : 0;
-    console.log(`[status]   Cached at: ${cachedPath}`);
-    console.log(`[status]   size=${stat.size} bytes, expected=${expectedSize} bytes, percent=${Math.min(percent, 100)}%`);
-    return {
-      exists: true,
-      sizeBytes: stat.size,
-      downloadPercent: Math.min(percent, 100),
-      cachePath: cachedPath,
-    };
-  }
-
-  console.log(`[status]   NOT in cache`);
-  return { exists: false };
 }

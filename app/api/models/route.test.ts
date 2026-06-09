@@ -37,10 +37,10 @@ vi.mock('../../lib/model-manifest', () => ({
 }));
 
 // --- Mock model-downloader ---
-const mockCheckStatus = vi.fn();
+const mockCheckLocal = vi.fn();
 const mockDownload = vi.fn();
 vi.mock('../../lib/model-downloader', () => ({
-  checkModelStatus: (...args: any[]) => mockCheckStatus(...args),
+  checkLocalModel: (...args: any[]) => mockCheckLocal(...args),
   downloadModel: (...args: any[]) => mockDownload(...args),
 }));
 
@@ -64,7 +64,7 @@ describe('/api/models', () => {
   });
 
   it('GET returns status of all models', async () => {
-    mockCheckStatus.mockResolvedValue({ exists: false });
+    mockCheckLocal.mockReturnValue({ exists: false });
 
     const route = await importRoute();
     const response = await route.GET();
@@ -77,7 +77,7 @@ describe('/api/models', () => {
   });
 
   it('GET shows downloaded status for existing models', async () => {
-    mockCheckStatus.mockResolvedValue({
+    mockCheckLocal.mockReturnValue({
       exists: true,
       sizeBytes: 4_180_000_000,
       downloadPercent: 100,
@@ -91,7 +91,7 @@ describe('/api/models', () => {
   });
 
   it('POST triggers download of a specific model and returns immediately', async () => {
-    mockCheckStatus.mockResolvedValue({ exists: false });
+    mockCheckLocal.mockReturnValue({ exists: false });
     mockDownload.mockResolvedValue(undefined);
 
     const route = await importRoute();
@@ -109,7 +109,7 @@ describe('/api/models', () => {
   });
 
   it('POST returns 409 if model already downloaded', async () => {
-    mockCheckStatus.mockResolvedValue({
+    mockCheckLocal.mockReturnValue({
       exists: true,
       sizeBytes: 4_180_000_000,
       downloadPercent: 100,
@@ -125,7 +125,7 @@ describe('/api/models', () => {
   });
 
   it('DELETE aborts an active download', async () => {
-    mockCheckStatus.mockResolvedValue({ exists: false });
+    mockCheckLocal.mockReturnValue({ exists: false });
     // Make download never resolve so it stays active
     mockDownload.mockReturnValue(new Promise(() => {}));
 
@@ -154,7 +154,7 @@ describe('/api/models', () => {
   });
 
   it('DELETE returns 404 if no active download', async () => {
-    mockCheckStatus.mockResolvedValue({ exists: false });
+    mockCheckLocal.mockReturnValue({ exists: false });
 
     const route = await importRoute();
     const response = await route.DELETE(

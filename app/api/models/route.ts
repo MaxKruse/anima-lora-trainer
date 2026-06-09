@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getResolvedModelManifest } from '../../lib/model-manifest';
-import { checkModelStatus, downloadModel, DownloadProgress } from '../../lib/model-downloader';
+import { checkLocalModel, downloadModel, DownloadProgress } from '../../lib/model-downloader';
 
 interface ActiveDownload {
   controller: AbortController;
   progress: number;
+  downloaded?: number;
   error?: string;
 }
 
@@ -24,25 +25,25 @@ export async function GET() {
 
     const models = await Promise.all(
       manifest.map(async (entry) => {
-        const status = await checkModelStatus(entry);
+        const status = checkLocalModel(entry);
         const active = activeDownloads.get(entry.name);
         const isActive = !!active;
 
-        // Determine status — check in-memory state first, then cache state
+        // Determine status — check in-memory state first, then local file state
         let modelStatus: 'pending' | 'downloading' | 'downloaded';
         if (isActive) {
           modelStatus = 'downloading';
         } else if (status.exists && status.downloadPercent === 100) {
           modelStatus = 'downloaded';
         } else if (status.exists && status.downloadPercent! > 0) {
-          // Partial file in cache (e.g., after server restart mid-download)
+          // Partial file (e.g., after server restart mid-download)
           modelStatus = 'downloading';
         } else {
           modelStatus = 'pending';
         }
 
         // Use in-memory progress from the onProgress callback when available,
-        // otherwise fall back to file-size-based progress from cache
+        // otherwise fall back to file-size-based progress from local file
         const progress = isActive ? active.progress : (status.downloadPercent || 0);
 
         console.log(`[models:GET] ${entry.name}: status=${modelStatus}, progress=${progress}%, exists=${status.exists}, sizeBytes=${status.sizeBytes}, expectedSizeBytes=${entry.expectedSizeBytes}, isActive=${isActive}, activeError=${active?.error ?? 'none'}`);
@@ -54,10 +55,11 @@ export async function GET() {
           expectedSizeBytes: entry.expectedSizeBytes,
           status: modelStatus,
           progress,
+          downloaded: isActive ? active.downloaded : undefined,
           sizeBytes: status.sizeBytes,
           canAbort: isActive,
           error: active?.error,
-          cachePath: status.cachePath,
+          localPath: status.localPath,
         };
       })
     );
@@ -106,8 +108,8 @@ export async function POST(request: Request) {
     console.log(`[models:POST] Found entry: hfRepo=${entry.hfRepo}, hfFile=${entry.hfFile}`);
 
     // Check if already downloaded
-    const status = await checkModelStatus(entry);
-    console.log(`[models:POST] checkModelStatus: exists=${status.exists}, sizeBytes=${status.sizeBytes}, downloadPercent=${status.downloadPercent}`);
+    const status = checkLocalModel(entry);
+    console.log(`[models:POST] checkLocalModel: exists=${status.exists}, sizeBytes=${status.sizeBytes}, downloadPercent=${status.downloadPercent}`);
 
     if (status.exists && status.downloadPercent === 100) {
       console.log(`[models:POST] Rejected: ${modelName} already downloaded`);
@@ -151,6 +153,9 @@ export async function POST(request: Request) {
 
             if (progress.progress !== undefined) {
               dlEntry.progress = progress.progress;
+            }
+            if (progress.downloaded !== undefined) {
+              dlEntry.downloaded = progress.downloaded;
             }
 
             if (progress.status === 'failed' && progress.error) {
