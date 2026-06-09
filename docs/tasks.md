@@ -1,0 +1,543 @@
+# LoRA Matrix Trainer — Task Breakdown
+
+Each task follows TDD: write the failing test first, then implement minimal code to pass. Tasks are ordered so earlier tasks unblock later ones.
+
+---
+
+## Phase 0: Foundation
+
+### Task 0.1 — GPU detection module (Python)
+
+**What:** `scripts/setup_env.py` — parse `nvidia-smi` output and classify GPU into CUDA tier.
+
+**Test first:**
+- `tests/test_gpu_detection.py`
+  - Given nvidia-smi output containing "RTX 50", return `{cuda: "cu130", series: "blackwell"}`
+  - Given nvidia-smi output containing "RTX 40", return `{cuda: "cu128", series: "ada"}`
+  - Given nvidia-smi output containing "RTX 30", return `{cuda: "cu128", series: "ampere"}`
+  - Given nvidia-smi output with no recognized GPU, raise `UnsupportedGpuError`
+  - Given empty/missing nvidia-smi output, raise `NvidiaSmiError`
+
+### Task 0.2 — pyproject.toml generator (Python)
+
+**What:** Function that writes a `pyproject.toml` with correct `[tool.uv.sources]` routing for the detected CUDA tier.
+
+**Test first:**
+- `tests/test_pyproject_generator.py`
+  - Given cu128, generated toml routes torch and torchvision to `pytorch-cu128` index
+  - Given cu130, generated toml routes torch and torchvision to `pytorch-cu130` index
+  - Generated toml contains all required dependencies from the spec
+  - Generated toml is valid TOML (parse round-trip)
+
+### Task 0.3 — Setup API endpoint
+
+**What:** `app/api/setup/route.ts` — triggers GPU detection and pyproject generation.
+
+**Test first:**
+- `app/api/setup/__tests__/route.test.ts`
+  - POST returns `{ gpu, cuda, status: "ok" }` when setup succeeds
+  - POST returns 500 with error detail when nvidia-smi fails
+  - Response includes the resolved CUDA version string
+
+### Task 0.4 — Setup wizard UI
+
+**What:** Page showing GPU detection button, CUDA version result, and environment status.
+
+**Test first:**
+- `app/components/__tests__/SetupWizard.test.tsx`
+  - Renders "Detect GPU" button initially
+  - After successful detection, displays GPU name and CUDA version
+  - Shows error message when detection fails
+  - Shows "Environment ready" when pyproject.toml exists
+
+---
+
+## Phase 1: Model Downloads
+
+### Task 1.1 — Model manifest module (TypeScript)
+
+**What:** Module defining Anima model download specs (HF path, local destination, expected size).
+
+**Test first:**
+- `tests/test_model_manifest.ts` (or `app/lib/__tests__/model-manifest.test.ts`)
+  - Returns 3 entries for Anima (diffusion model, VAE, text encoder)
+  - Each entry has `hfPath`, `localPath`, and `expectedSizeBytes`
+  - Local paths are under `models/anima/`
+
+### Task 1.2 — Model download service (TypeScript)
+
+**What:** Server-side function that invokes `huggingface-cli download` and streams progress.
+
+**Test first:**
+- `app/lib/__tests__/model-downloader.test.ts`
+  - Calls huggingface-cli with correct args for each model entry
+  - Reports progress as percentage of expected file size
+  - Retries on transient network error (up to 3 attempts)
+  - Aborts gracefully when signal received
+
+### Task 1.3 — Model verification (Python)
+
+**What:** Function that checks a downloaded `.safetensors` file has a valid header.
+
+**Test first:**
+- `tests/test_model_verify.py`
+  - Given a valid safetensors file path, return `True`
+  - Given a truncated file, return `False`
+  - Given a non-existent file, raise `FileNotFoundError`
+
+### Task 1.4 — Models API endpoint
+
+**What:** `app/api/models/route.ts` — download, check status, verify.
+
+**Test first:**
+- `app/api/models/__tests__/route.test.ts`
+  - GET returns status of all models (downloaded / pending / verifying)
+  - POST triggers download of a specific model
+  - Returns 409 if model already downloaded
+  - Returns 422 if verification fails after download
+
+### Task 1.5 — Download UI button with progress
+
+**What:** "Download Models" button with per-model progress bars.
+
+**Test first:**
+- `app/components/__tests__/ModelDownloader.test.tsx`
+  - Renders button for each pending model
+  - Shows progress bar during download
+  - Shows checkmark when download completes
+  - Shows error icon when download fails
+
+---
+
+## Phase 2: Single Training
+
+### Task 2.1 — Training parameter schema (TypeScript)
+
+**What:** Validation schema for Anima training parameters (zod or similar).
+
+**Test first:**
+- `app/lib/__tests__/training-schema.test.ts`
+  - Accepts valid single-run parameter set
+  - Rejects missing required fields (network_dim, learning_rate, epochs, etc.)
+  - Rejects out-of-range values (negative dim, zero epochs)
+  - Accepts all optimizer types from spec
+  - Accepts all scheduler types from spec
+
+### Task 2.2 — Dataset TOML generator (Python)
+
+**What:** Function that generates a `.toml` dataset config from user-provided image path and batch size.
+
+**Test first:**
+- `tests/test_dataset_toml.py`
+  - Given image_dir and batch_size, produces valid TOML with correct structure
+  - `num_repeats` is calculated as `ceil(desired_steps / num_images)`
+  - Sets `caption_extension = '.txt'` and `shuffle_caption = true`
+  - Writes to specified output path
+
+### Task 2.3 — Training command builder (Python)
+
+**What:** Function that assembles the full `accelerate launch` command from parameters.
+
+**Test first:**
+- `tests/test_command_builder.py`
+  - Given Anima params, produces command with all required flags from spec
+  - Includes correct model paths for diffusion model, VAE, text encoder
+  - Sets `--network_module=networks.lora_anima`
+  - Includes `--mixed_precision=bf16`, `--gradient_checkpointing`, `--cache_latents`, `--cache_text_encoder_outputs`
+  - Includes `--timestep_sampling=sigmoid`, `--discrete_flow_shift=1.0`
+  - Includes `--vae_chunk_size=64`, `--vae_disable_cache`
+  - Includes `--save_every_n_epochs=1`
+
+### Task 2.4 — Single training script
+
+**What:** `scripts/train_single.py` — parses args, generates dataset TOML, builds command, launches training.
+
+**Test first:**
+- `tests/test_train_single.py`
+  - Accepts params dict and produces correct command (reuse command builder tests)
+  - Creates output directory before launching
+  - Writes initial job manifest with status `running`
+  - Updates manifest to `completed` on exit code 0
+  - Updates manifest to `failed` on non-zero exit code
+
+### Task 2.5 — Train API endpoint
+
+**What:** `app/api/train/route.ts` — validates params, launches `uv run scripts/train_single.py`.
+
+**Test first:**
+- `app/api/train/__tests__/route.test.ts`
+  - POST with valid params returns `{ jobId, status: "started" }`
+  - POST with invalid params returns 400 with validation errors
+  - POST when another job is running returns 409
+  - Job ID is unique (timestamp + random suffix)
+
+### Task 2.6 — Anima parameter form UI
+
+**What:** `app/components/AnimaTab.tsx` — form with all parameter fields from spec.
+
+**Test first:**
+- `app/components/__tests__/AnimaTab.test.tsx`
+  - Renders all fields from spec (network dim, alpha, lr, batch size, epochs, optimizer, scheduler, training images, lora name, mixed precision, timestep sampling, gradient checkpointing, cache latents, cache text encoder)
+  - Each field has correct default value
+  - Submitting fires callback with correct param object
+  - Validates required fields before submit
+
+### Task 2.7 — Job tracking store (TypeScript)
+
+**What:** In-memory + file-based job state tracker.
+
+**Test first:**
+- `app/lib/__tests__/job-store.test.ts`
+  - `createJob(params)` returns unique job ID and stores job
+  - `getJob(id)` returns job with current status
+  - `listJobs()` returns all jobs
+  - Job state persists to file (survives process restart)
+  - Loading from file restores all jobs
+
+### Task 2.8 — Jobs API endpoint
+
+**What:** `app/api/jobs/route.ts` — list jobs, get individual job status.
+
+**Test first:**
+- `app/api/jobs/__tests__/route.test.ts`
+  - GET returns array of all jobs
+  - GET with query param `?id=X` returns single job
+  - Returns empty array when no jobs exist
+
+### Task 2.9 — Job list UI
+
+**What:** `app/components/JobList.tsx` — displays active and recent jobs.
+
+**Test first:**
+- `app/components/__tests__/JobList.test.tsx`
+  - Renders job cards with name, status, progress
+  - Shows "running", "completed", "failed" status labels
+  - Expandable to show individual permutation statuses (for matrix jobs)
+
+---
+
+## Phase 3: Matrix Training
+
+### Task 3.1 — Parameter range parser (Python)
+
+**What:** Parse comma-separated parameter values, including `%` suffix resolution.
+
+**Test first:**
+- `tests/test_param_parser.py`
+  - `"1,2,3"` → `[1, 2, 3]` (integers)
+  - `"1e-4,5e-4,1e-3"` → `[1e-4, 5e-4, 1e-3]` (floats)
+  - `"AdamW8Bit,Prodigy"` → `["AdamW8Bit", "Prodigy"]` (strings)
+  - `"1,4,8,25%"` → `[1, 4, 8, "25%"]` (preserves `%` marker for later resolution)
+  - Empty string raises `ValueError`
+
+### Task 3.2 — Permutation generator (Python)
+
+**What:** Compute Cartesian product of parameter ranges and resolve `%` values.
+
+**Test first:**
+- `tests/test_permutation_generator.py`
+  - Given `{dim: [1,2], alpha: [1,4]}`, produces 2×2 = 4 permutations
+  - Given `{dim: [1,2,3], alpha: [1,4], lr: [1e-4]}`, produces 3×2×1 = 6 permutations
+  - `25%` alpha resolves to `dim * 0.25` for each permutation's dim value
+  - Each permutation is a flat dict of `{param_name: resolved_value}`
+  - Large input (8×4×3×4×2×2×2) produces exactly 3,072 permutations
+
+### Task 3.3 — Permutation folder namer (Python)
+
+**What:** Generate deterministic folder names from permutation params.
+
+**Test first:**
+- `tests/test_permutation_namer.py`
+  - `{network_dim: 1, network_alpha: 1, learning_rate: 1e-4}` → `anima_network-dim-1_network-alpha-1_learning-rate-1e-4`
+  - Float values use scientific notation consistently
+  - Params sorted alphabetically for deterministic naming
+
+### Task 3.4 — Manifest writer (Python)
+
+**What:** Create and update `manifest.json` tracking all permutations and statuses.
+
+**Test first:**
+- `tests/test_manifest.py`
+  - Initial manifest has all permutations with status `pending`
+  - Updating one permutation to `running` persists correctly
+  - Updating to `completed` stores output file paths
+  - Updating to `failed` stores error message
+  - Manifest survives re-read (JSON round-trip)
+
+### Task 3.5 — Matrix trainer script
+
+**What:** `scripts/matrix_trainer.py` — parse args, generate permutations, iterate and train each.
+
+**Test first:**
+- `tests/test_matrix_trainer.py`
+  - Creates output directory and manifest before training loop
+  - Processes permutations sequentially (one at a time)
+  - Updates manifest status for each permutation as it completes
+  - Stops on `cancel` signal file presence
+  - Supports `--resume` to skip already-completed permutations
+
+### Task 3.6 — Matrix train API endpoint
+
+**What:** `app/api/train/matrix/route.ts` — validates matrix params, launches matrix trainer.
+
+**Test first:**
+- `app/api/train/matrix/__tests__/route.test.ts`
+  - POST with valid matrix params returns `{ jobId, permutationCount, status: "started" }`
+  - Rejects params that would produce 0 permutations
+  - Returns 400 if any parameter range is empty
+
+### Task 3.7 — Matrix mode toggle UI
+
+**What:** Toggle between Single Run and Matrix Run modes in the parameter form.
+
+**Test first:**
+- `app/components/__tests__/MatrixToggle.test.tsx`
+  - Default mode is Single Run
+  - Toggling to Matrix Run changes inputs to accept comma-separated values
+  - Shows permutation count when in Matrix mode
+  - Permutation count updates reactively as values change
+
+---
+
+## Phase 4: Evaluation
+
+### Task 4.1 — Tag extractor (Python)
+
+**What:** Read `.txt` caption files from training image directory and collect unique tags.
+
+**Test first:**
+- `tests/test_tag_extractor.py`
+  - Given directory with `.txt` files, returns list of all unique tags
+  - Splits multi-tag captions (comma-separated or space-separated)
+  - Ignores empty caption files
+  - Handles missing captions gracefully (no crash)
+
+### Task 4.2 — Prompt generator (Python)
+
+**What:** Combine random subset of tags into a single evaluation prompt.
+
+**Test first:**
+- `tests/test_prompt_generator.py`
+  - Given 20 tags, produces prompt with random subset (5-10 tags)
+  - Same seed produces same prompt (deterministic)
+  - Different seeds produce different prompts
+  - Returns empty string if no tags available
+
+### Task 4.3 — LoRA file finder (Python)
+
+**What:** Scan a permutation folder for `.safetensors` files and pick the highest epoch checkpoint.
+
+**Test first:**
+- `tests/test_lora_finder.py`
+  - Given folder with `{name}-000001.safetensors` through `{name}-000010.safetensors`, returns the `-000010` file
+  - Given folder with only one checkpoint, returns it
+  - Given empty folder, raises `NoLoraFoundError`
+  - Ignores non-safetensors files
+
+### Task 4.4 — sd-cli command builder (Python)
+
+**What:** Assemble the `sd-cli` command for evaluating a single LoRA.
+
+**Test first:**
+- `tests/test_sdcli_builder.py`
+  - Produces command with correct model paths (diffusion, VAE, LLM)
+  - Includes `--lora-model-dir` pointing to permutation folder
+  - Includes prompt with `<lora:{filename}:1>` syntax
+  - Sets `--cfg-scale 6.0`, `--sampling-method euler`, `--steps 20`
+  - Sets `--diffusion-fa`, `--offload-to-cpu`
+  - Sets fixed seed via `-s {seed}`
+  - Sets output path via `-o`
+
+### Task 4.5 — Matrix evaluator script
+
+**What:** `scripts/matrix_evaluator.py` — scan results, find LoRAs, run sd-cli, write evaluation.json.
+
+**Test first:**
+- `tests/test_matrix_evaluator.py`
+  - Scans results folder and finds all permutation subdirectories
+  - Picks highest-epoch LoRA for each permutation
+  - Runs sd-cli for each LoRA with same prompt and seed
+  - Writes `evaluation.json` with correct structure
+  - Records `inference_time_ms` per result
+  - Records `status: "failed"` for sd-cli errors without stopping entire run
+
+### Task 4.6 — Evaluate API endpoint
+
+**What:** `app/api/evaluate/route.ts` — triggers matrix evaluator for a given run.
+
+**Test first:**
+- `app/api/evaluate/__tests__/route.test.ts`
+  - POST with valid run ID starts evaluation
+  - Returns 404 for non-existent run ID
+  - Returns 409 if evaluation already running for this run
+  - Returns evaluation results when complete
+
+### Task 4.7 — "Evaluate All" button UI
+
+**What:** Button to trigger evaluation on a completed matrix run.
+
+**Test first:**
+- `app/components/__tests__/EvaluateButton.test.tsx`
+  - Renders when run has `completed` status
+  - Disabled during evaluation
+  - Shows progress during evaluation
+  - Triggers results refresh after evaluation completes
+
+---
+
+## Phase 5: Results Dashboard
+
+### Task 5.1 — Results loader (TypeScript)
+
+**What:** Parse `manifest.json` + `evaluation.json` into structured result objects.
+
+**Test first:**
+- `app/lib/__tests__/results-loader.test.ts`
+  - Loads manifest and evaluation.json from run directory
+  - Merges permutation params with evaluation results
+  - Returns array of `{ params, loraFile, imageFile, status, inferenceTimeMs }`
+  - Handles missing evaluation.json (returns results without images)
+
+### Task 5.2 — Results API endpoint
+
+**What:** `app/api/results/route.ts` — browse results, fetch images.
+
+**Test first:**
+- `app/api/results/__tests__/route.test.ts`
+  - GET returns list of all completed runs
+  - GET with `?runId=X` returns detailed results for that run
+  - Supports `?sort=param_name` query parameter
+  - Supports `?filter=param_name:value` query parameter
+
+### Task 5.3 — Results grid component
+
+**What:** `app/components/ResultsGrid.tsx` — grid of evaluation image cards.
+
+**Test first:**
+- `app/components/__tests__/ResultsGrid.test.tsx`
+  - Renders one card per permutation result
+  - Each card shows parameter values and evaluation image
+  - Missing images show placeholder
+  - Clicking card selects it for comparison
+
+### Task 5.4 — Filter/sort controls
+
+**What:** UI controls for filtering and sorting results by parameter values.
+
+**Test first:**
+- `app/components/__tests__/ResultsFilters.test.tsx`
+  - Shows filter dropdowns for each parameter dimension
+  - Filtering narrows visible results
+  - Sorting reorders results by selected parameter
+  - Clearing filters shows all results
+
+### Task 5.5 — Side-by-side comparison view
+
+**What:** Select 2+ results and display them side by side.
+
+**Test first:**
+- `app/components/__tests__/ComparisonView.test.tsx`
+  - Renders selected results in a horizontal row
+  - Each panel shows image, params, and LoRA file link
+  - Minimum 2 selections required
+  - Deselect removes from comparison
+
+### Task 5.6 — LoRA download links
+
+**What:** Download links for each LoRA `.safetensors` file.
+
+**Test first:**
+- `app/components/__tests__/LoraDownload.test.tsx`
+  - Renders download link pointing to correct file path
+  - Link disabled when file does not exist
+
+---
+
+## Phase 6: Polish & Robustness
+
+### Task 6.1 — Training log streaming
+
+**What:** Stream training output logs from child process to UI via Server-Sent Events or polling.
+
+**Test first:**
+- `app/lib/__tests__/log-streamer.test.ts`
+  - Captures stdout/stderr from child process
+  - Makes logs available line-by-line
+  - Supports searching/filtering log lines
+
+### Task 6.2 — Log viewer UI
+
+**What:** Scrollable, searchable log viewer panel.
+
+**Test first:**
+- `app/components/__tests__/LogViewer.test.tsx`
+  - Renders log lines in order
+  - Search input filters visible lines
+  - Auto-scrolls to latest line
+  - "Failed" lines highlighted in red
+
+### Task 6.3 — GPU VRAM monitoring
+
+**What:** Periodic `nvidia-smi` query to report VRAM usage during training.
+
+**Test first:**
+- `app/lib/__tests__/vram-monitor.test.ts`
+  - Parses nvidia-smi JSON output for VRAM used/total
+  - Returns percentage used
+  - Handles nvidia-smi failure gracefully
+
+### Task 6.4 — Pause/resume/cancel
+
+**What:** Control signals for running matrix jobs.
+
+**Test first:**
+- `app/lib/__tests__/job-controller.test.ts`
+  - `pause(jobId)` writes pause signal file
+  - `resume(jobId)` removes pause signal file
+  - `cancel(jobId)` writes cancel signal file and terminates process
+  - Matrix trainer respects pause signal (waits between permutations)
+  - Matrix trainer respects cancel signal (exits loop)
+
+### Task 6.5 — Parameter preset save/load
+
+**What:** Save and load parameter configurations as JSON presets.
+
+**Test first:**
+- `app/lib/__tests__/preset-store.test.ts`
+  - `savePreset(name, params)` stores preset
+  - `loadPreset(name)` returns stored params
+  - `listPresets()` returns all preset names
+  - Overwriting preset name replaces old data
+  - Deleting preset removes it
+
+### Task 6.6 — Error boundary and user-friendly errors
+
+**What:** Global error boundaries and formatted error messages.
+
+**Test first:**
+- `app/components/__tests__/ErrorBoundary.test.tsx`
+  - Catches render errors and shows fallback UI
+  - Shows error message from API responses
+  - Provides "retry" action where applicable
+
+---
+
+## Cross-Cutting Concerns
+
+### Testing infrastructure setup
+
+Before any of the above, ensure:
+- **TypeScript tests:** Jest or Vitest configured with Next.js compatibility
+- **Python tests:** `pytest` added to `pyproject.toml` dev dependencies
+- **Test directories:** `tests/` (Python) and `__tests__/` (TypeScript, colocated)
+- **CI check:** `bun test` and `uv run pytest` both pass before merge
+
+### Shared utilities to test early
+
+These are used across multiple phases and should be tested first:
+
+| Utility | Test file | Key assertions |
+|---|---|---|
+| Path helpers (resolve model paths, output dirs) | `app/lib/__tests__/paths.test.ts` + `tests/test_paths.py` | Correct resolution on Windows and Linux |
+| Child process runner (launch `uv run` commands) | `app/lib/__tests__/process-runner.test.ts` | Captures stdout/stderr, returns exit code, supports timeout, supports abort |
+| File watcher (detect output file changes) | `app/lib/__tests__/file-watcher.test.ts` | Emits event on file creation, handles rapid changes |
