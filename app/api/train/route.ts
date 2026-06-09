@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { trainingSchema, type TrainingParams } from '../../lib/training-schema';
+import { createTrainingZip } from '../../lib/training-zip';
 
 const PROJECT_ROOT = path.resolve(process.cwd());
 const JOBS_DIR = path.join(PROJECT_ROOT, 'jobs');
@@ -49,8 +50,16 @@ function writeJobManifest(jobId: string, data: Record<string, any>): void {
 /**
  * Launch a training job via uv run scripts/train_single.py.
  */
-function launchTraining(jobId: string, params: TrainingParams): void {
+async function launchTraining(jobId: string, params: TrainingParams): Promise<void> {
   const outputDir = path.join(PROJECT_ROOT, 'output', jobId);
+
+  // Create zip of training data (best-effort, don't block training)
+  let zipPath: string | null = null;
+  try {
+    zipPath = await createTrainingZip(params.trainingImages, outputDir);
+  } catch (err: any) {
+    console.warn(`[train:${jobId}] zip creation skipped: ${err.message}`);
+  }
 
   const trainingParams = {
     ...params,
@@ -74,6 +83,7 @@ function launchTraining(jobId: string, params: TrainingParams): void {
     status: 'running',
     params: trainingParams,
     outputDir,
+    zipPath: zipPath || undefined,
     startedAt: new Date().toISOString(),
     pid: proc.pid,
   });
@@ -146,7 +156,10 @@ export async function POST(request: Request) {
     currentJob = { jobId, params };
 
     // Launch training asynchronously
-    launchTraining(jobId, params);
+    launchTraining(jobId, params).catch((err) => {
+      console.error(`[train:${jobId}] launch error:`, err);
+      currentJob = null;
+    });
 
     return NextResponse.json({
       jobId,

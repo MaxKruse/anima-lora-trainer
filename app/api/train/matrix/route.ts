@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { getJobStore } from '../../../lib/job-store';
+import { createTrainingZip } from '../../../lib/training-zip';
 
 const PROJECT_ROOT = path.resolve(process.cwd());
 
@@ -94,8 +95,17 @@ export async function POST(request: Request) {
       permutationCount,
     });
 
-    // Launch matrix trainer
+    // Create zip of training data (best-effort)
     const outputDir = path.join(PROJECT_ROOT, 'output', jobId);
+    const trainingImagesPath = (baseParams as any).trainingImages;
+    let zipPath: string | null = null;
+    if (trainingImagesPath) {
+      try {
+        zipPath = await createTrainingZip(trainingImagesPath, outputDir);
+      } catch (err: any) {
+        console.warn(`[matrix:${jobId}] zip creation skipped: ${err.message}`);
+      }
+    }
     const cmd = 'uv';
     const args = [
       'run',
