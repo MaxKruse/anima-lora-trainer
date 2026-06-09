@@ -18,8 +18,6 @@ function createDirectoryPickerProps() {
 describe('DirectoryPicker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Reset picker support detection - delete the property entirely
-    delete (window as any).showDirectoryPicker;
   });
 
   it('renders label and input', () => {
@@ -100,85 +98,11 @@ describe('DirectoryPicker', () => {
       />
     );
 
-    // The clear button (✕) should be visible
     const clearButton = screen.getByTitle('Clear');
     expect(clearButton).toBeInTheDocument();
 
     fireEvent.click(clearButton);
     expect(onChange).toHaveBeenCalledWith('');
-  });
-
-  it('displays Check button when autoVerify is false', () => {
-    render(
-      <DirectoryPicker
-        label="Test"
-        value="/some/path"
-        onChange={() => {}}
-        id="test"
-        autoVerify={false}
-      />
-    );
-
-    const checkButton = screen.getByTitle('Check if directory exists');
-    expect(checkButton).toBeInTheDocument();
-  });
-
-  it('hides Check button when autoVerify is true (default)', () => {
-    render(
-      <DirectoryPicker
-        label="Test"
-        value="/some/path"
-        onChange={() => {}}
-        id="test"
-      />
-    );
-
-    const checkButtons = screen.queryAllByTitle('Check if directory exists');
-    expect(checkButtons).toHaveLength(0);
-  });
-
-  it('Check button is disabled when value is empty', () => {
-    render(
-      <DirectoryPicker
-        label="Test"
-        value=""
-        onChange={() => {}}
-        id="test"
-        autoVerify={false}
-      />
-    );
-
-    const checkButton = screen.getByTitle('Check if directory exists');
-    expect(checkButton).toBeDisabled();
-  });
-
-  it('calls verify API when Check is clicked (manual mode)', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ exists: true }),
-    });
-
-    const onChange = vi.fn();
-    render(
-      <DirectoryPicker
-        label="Test"
-        value="/existing/path"
-        onChange={onChange}
-        id="test"
-        autoVerify={false}
-      />
-    );
-
-    const checkButton = screen.getByTitle('Check if directory exists');
-    fireEvent.click(checkButton);
-
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith('/api/config/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: '/existing/path' }),
-      });
-    });
   });
 
   it('auto-verifies when value changes (autoVerify default)', async () => {
@@ -204,6 +128,22 @@ describe('DirectoryPicker', () => {
         body: JSON.stringify({ path: '/existing/path' }),
       });
     });
+  });
+
+  it('does not auto-verify when autoVerify is false', async () => {
+    render(
+      <DirectoryPicker
+        label="Test"
+        value="/some/path"
+        onChange={() => {}}
+        id="test"
+        autoVerify={false}
+      />
+    );
+
+    // Wait a bit to ensure no fetch is called
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it('shows success message when directory exists (auto-verify)', async () => {
@@ -243,26 +183,6 @@ describe('DirectoryPicker', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Directory not found/)).toBeInTheDocument();
-    });
-  });
-
-  it('does not show Browse button when showDirectoryPicker is not supported', async () => {
-    // Delete the property entirely so 'in window' check fails
-    delete (window as any).showDirectoryPicker;
-
-    render(
-      <DirectoryPicker
-        label="Test"
-        value=""
-        onChange={() => {}}
-        id="test"
-      />
-    );
-
-    // Wait for useEffect to run and detect support
-    await waitFor(() => {
-      const browseButtons = screen.queryAllByTitle('Open folder picker');
-      expect(browseButtons).toHaveLength(0);
     });
   });
 });

@@ -111,14 +111,20 @@ def _write_manifest(path: Path, data: dict) -> None:
 
 
 def main():
-    """CLI entry point: python train_single.py --params-json <json_string>"""
+    """CLI entry point: python train_single.py --params-json-file <path>"""
     import argparse
 
     parser = argparse.ArgumentParser(description="Run single LoRA training")
-    parser.add_argument("--params-json", required=True, help="JSON string of training params")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--params-json", help="JSON string of training params")
+    group.add_argument("--params-json-file", help="Path to JSON file of training params")
     args = parser.parse_args()
 
-    params = json.loads(args.params_json)
+    if args.params_json_file:
+        with open(args.params_json_file, "r", encoding="utf-8") as f:
+            params = json.load(f)
+    else:
+        params = json.loads(args.params_json)
     result = run_training(params)
 
     if result["status"] == "completed":

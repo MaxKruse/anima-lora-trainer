@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { trainingSchema, type TrainingParams } from '../../lib/training-schema';
 import { createTrainingZip } from '../../lib/training-zip';
 
@@ -66,13 +67,18 @@ async function launchTraining(jobId: string, params: TrainingParams): Promise<vo
     output_dir: outputDir,
   };
 
+  // Write params to a temp file to avoid shell escaping issues on Windows
+  // (cmd.exe mangles JSON with quotes, braces, etc. when shell: true)
+  const paramsFile = path.join(os.tmpdir(), `train-params-${jobId}.json`);
+  fs.writeFileSync(paramsFile, JSON.stringify(trainingParams), 'utf8');
+
   const cmd = 'uv';
   const args = [
     'run',
     'python',
     path.join(PROJECT_ROOT, 'scripts', 'train_single.py'),
-    '--params-json',
-    JSON.stringify(trainingParams),
+    '--params-json-file',
+    paramsFile,
   ];
 
   const proc = spawn(cmd, args, { shell: true, cwd: PROJECT_ROOT });

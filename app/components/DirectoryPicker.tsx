@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 interface DirectoryPickerProps {
   label: string;
@@ -10,19 +10,19 @@ interface DirectoryPickerProps {
   hint?: string;
   error?: string;
   id?: string;
+  /**
+   * When true (default), auto-verify the directory exists on the server.
+   * Set to false for directories that are created automatically (e.g., output dir).
+   */
   autoVerify?: boolean;
 }
 
 /**
- * DirectoryPicker — combines a native folder picker (File System Access API)
- * with a manual text input fallback. Persists the selected path.
+ * DirectoryPicker — text input with optional auto-verification.
  *
- * On browsers that support showDirectoryPicker, the "Browse" button opens
- * a native folder selection dialog. The path text input always works as a
- * fallback for manual entry.
- *
- * When autoVerify is true, the directory is checked automatically when the
- * value changes (debounced). When false, the user must click "Check" manually.
+ * When autoVerify is true, the directory path is checked against the server
+ * automatically when the value changes (debounced). When false, no verification
+ * occurs (useful for directories that will be created on the fly).
  */
 export function DirectoryPicker({
   label,
@@ -34,30 +34,25 @@ export function DirectoryPicker({
   id,
   autoVerify = true,
 }: DirectoryPickerProps) {
-  const [isPickerSupported, setIsPickerSupported] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verifyStatus, setVerifyStatus] = useState<'ok' | 'fail' | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Detect File System Access API support
-  useEffect(() => {
-    setIsPickerSupported(
-      typeof window !== 'undefined' && 'showDirectoryPicker' in window
-    );
-  }, []);
+  const prevValueRef = useRef<string | undefined>(undefined);
 
   // Auto-verify when value changes (debounced)
   useEffect(() => {
-    if (!autoVerify || !value.trim() || verifying) return;
+    if (!autoVerify || !value.trim()) return;
+    // Skip if value hasn't actually changed (prevents flicker on re-renders)
+    if (value === prevValueRef.current) return;
+    prevValueRef.current = value;
 
-    // Clear any pending debounce
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
     }
 
     debounceRef.current = setTimeout(async () => {
-      setVerifyStatus(null);
+      if (verifying) return; // Guard against overlapping calls
+      setVerifying(true);
       try {
         const res = await fetch('/api/config/verify', {
           method: 'POST',
@@ -68,53 +63,15 @@ export function DirectoryPicker({
         setVerifyStatus(res.ok && data.exists ? 'ok' : 'fail');
       } catch {
         setVerifyStatus('fail');
+      } finally {
+        setVerifying(false);
       }
     }, 400);
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [value, autoVerify, verifying]);
-
-  const handleBrowse = useCallback(async () => {
-    if (!isPickerSupported) return;
-
-    try {
-      // @ts-ignore — showDirectoryPicker isn't in TS lib yet
-      const handle = await window.showDirectoryPicker({
-        mode: 'read',
-        startIn: 'documents',
-      });
-      // FileSystemDirectoryHandle.name gives just the folder name.
-      // We can't get the full path from the browser for security reasons.
-      // So we set a descriptive label and let the user confirm/edit.
-      const displayName = handle.name;
-      onChange(displayName);
-      setVerifyStatus(null);
-    } catch {
-      // User cancelled — do nothing
-    }
-  }, [isPickerSupported, onChange]);
-
-  const handleVerify = useCallback(async () => {
-    if (!value.trim()) return;
-    setVerifying(true);
-    setVerifyStatus(null);
-
-    try {
-      const res = await fetch('/api/config/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: value }),
-      });
-      const data = await res.json();
-      setVerifyStatus(res.ok && data.exists ? 'ok' : 'fail');
-    } catch {
-      setVerifyStatus('fail');
-    } finally {
-      setVerifying(false);
-    }
-  }, [value]);
+  }, [value, autoVerify]);
 
   const handleClear = useCallback(() => {
     onChange('');
@@ -130,9 +87,9 @@ export function DirectoryPicker({
         {label}
       </label>
 
-      <div className="flex gap-2">
+      {/* Input row */}
+      <div className="flex gap-2 items-center">
         <input
-          ref={inputRef}
           id={id}
           type="text"
           value={value}
@@ -152,36 +109,13 @@ export function DirectoryPicker({
           } focus:outline-none focus:ring-2`}
         />
 
-        {isPickerSupported && (
-          <button
-            type="button"
-            onClick={handleBrowse}
-            className="px-3 py-2 text-sm bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-600 rounded-md hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors whitespace-nowrap"
-            title="Open folder picker"
-          >
-            Browse
-          </button>
-        )}
-
-        {!autoVerify && (
-          <button
-            type="button"
-            onClick={handleVerify}
-            disabled={verifying || !value.trim()}
-            className="px-3 py-2 text-sm bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-600 rounded-md hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
-            title="Check if directory exists"
-          >
-            {verifying ? '...' : 'Check'}
-          </button>
-        )}
-
-        {autoVerify && verifying && (
+        {verifying && (
           <span className="px-2 py-1 text-sm text-slate-400 dark:text-slate-500">
             ...
           </span>
         )}
 
-        {autoVerify && !verifying && verifyStatus === null && value.trim() && (
+        {verifyStatus === null && value.trim() && !verifying && (
           <span className="px-2 py-1 text-sm text-slate-400 dark:text-slate-500">
             ...
           </span>
@@ -191,7 +125,7 @@ export function DirectoryPicker({
           <button
             type="button"
             onClick={handleClear}
-            className="px-2 py-2 text-sm text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+            className="px-2 py-2 text-sm text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors shrink-0"
             title="Clear"
           >
             ✕

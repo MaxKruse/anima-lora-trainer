@@ -43,7 +43,7 @@ export function TrainTabs({ onSubmit, trainingImagesPath, matrixMode = false }: 
   const [activeTab, setActiveTab] = useState<ModelType>('anima');
 
   return (
-    <div className="max-w-4xl mx-auto p-6">
+    <div className="max-w-screen-xl mx-auto px-16 py-8">
       {/* Model type tabs */}
       <div className="mb-6 border-b border-slate-200 dark:border-slate-700">
         <nav className="flex gap-1 -mb-px overflow-x-auto" aria-label="Model types">

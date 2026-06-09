@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { DirectoryPicker } from './DirectoryPicker';
 import { TrainTabs } from './TrainTabs';
 import { MatrixToggle } from './MatrixToggle';
@@ -17,6 +17,11 @@ interface AppConfig {
   sdScriptsPath?: string;
 }
 
+interface DatasetDir {
+  name: string;
+  path: string;
+}
+
 type DashboardSection = 'setup' | 'models' | 'train' | 'jobs';
 
 interface SetupReadiness {
@@ -30,8 +35,22 @@ export function Dashboard() {
     trainingImagesDir: '',
     outputDir: '',
   });
+  const [savedConfig, setSavedConfig] = useState<AppConfig | null>(null);
   const [configErrors, setConfigErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+
+  // Dataset browser state
+  const [datasets, setDatasets] = useState<DatasetDir[]>([]);
+  const [datasetsLoading, setDatasetsLoading] = useState(false);
+  const [datasetsError, setDatasetsError] = useState<string | null>(null);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Detect unsaved changes
+  const hasUnsaved = savedConfig !== null && (
+    config.trainingImagesDir !== savedConfig.trainingImagesDir ||
+    config.outputDir !== savedConfig.outputDir
+  );
   const [trainingResponse, setTrainingResponse] = useState<string | null>(null);
   const [matrixMode, setMatrixMode] = useState<'single' | 'matrix'>('single');
 
@@ -83,12 +102,51 @@ export function Dashboard() {
       .then((data) => {
         if (data.config) {
           setConfig(data.config);
+          setSavedConfig(data.config);
         }
       })
       .catch(() => {
         // Config load failed — use defaults
       });
   }, []);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowDropdown(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Load datasets
+  const loadDatasets = useCallback(async () => {
+    if (datasets.length > 0) {
+      setShowDropdown((prev) => !prev);
+      return;
+    }
+    setDatasetsLoading(true);
+    setDatasetsError(null);
+    try {
+      const res = await fetch('/api/datasets');
+      const data = await res.json();
+      if (res.ok) {
+        setDatasets(data.directories || []);
+        setShowDropdown(true);
+        if (data.directories?.length === 0) {
+          setDatasetsError('No dataset directories found in datasets/');
+        }
+      } else {
+        setDatasetsError(data.error || 'Failed to load datasets');
+      }
+    } catch {
+      setDatasetsError('Failed to connect to server');
+    } finally {
+      setDatasetsLoading(false);
+    }
+  }, [datasets.length]);
 
   const saveConfig = useCallback(async (updates: Partial<AppConfig>) => {
     setSaving(true);
@@ -101,6 +159,7 @@ export function Dashboard() {
       if (res.ok) {
         const data = await res.json();
         setConfig(data.config);
+        setSavedConfig(data.config);
       }
     } catch {
       // Ignore save errors
@@ -123,6 +182,11 @@ export function Dashboard() {
     },
     [configErrors]
   );
+
+  const selectDataset = useCallback((datasetPath: string) => {
+    handleConfigChange('trainingImagesDir', datasetPath);
+    setShowDropdown(false);
+  }, [handleConfigChange]);
 
   const handleMatrixModeChange = useCallback(
     (mode: 'single' | 'matrix') => {
@@ -241,7 +305,7 @@ export function Dashboard() {
                 automatically and persist between sessions.
               </p>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <DirectoryPicker
                   id="trainingImagesDir"
                   label="Training Images Directory"
@@ -257,14 +321,69 @@ export function Dashboard() {
                   label="Output Directory"
                   value={config.outputDir}
                   onChange={(v) => handleConfigChange('outputDir', v)}
-                  placeholder="/path/to/outputs"
-                  hint="Where trained LoRA files will be saved"
+                  placeholder="outputs"
+                  hint="Directory name or path — created automatically if it doesn't exist"
                   error={configErrors.outputDir}
+                  autoVerify={false}
                 />
               </div>
 
+              {/* Browse Datasets */}
+              <div ref={dropdownRef} className="mt-4">
+                <button
+                  type="button"
+                  onClick={loadDatasets}
+                  disabled={datasetsLoading}
+                  className="w-full px-4 py-2 text-sm bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-600 rounded-md hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                  title="Browse dataset directories on server"
+                >
+                  {datasetsLoading ? (
+                    <span className="flex items-center justify-center gap-1">
+                      <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Loading
+                    </span>
+                  ) : showDropdown ? (
+                    '▲ Hide Datasets'
+                  ) : (
+                    'Browse Datasets'
+                  )}
+                </button>
+
+                {datasetsError && (
+                  <p className="mt-1 text-xs text-yellow-600 dark:text-yellow-400">{datasetsError}</p>
+                )}
+
+                {/* Dropdown list of datasets */}
+                {showDropdown && datasets.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 mt-1 max-h-60 overflow-y-auto bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md shadow-lg z-20">
+                    {datasets.map((ds) => (
+                      <button
+                        key={ds.path}
+                        type="button"
+                        onClick={() => selectDataset(ds.path)}
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors border-b border-slate-100 dark:border-slate-700 last:border-b-0 ${
+                          config.trainingImagesDir === ds.path
+                            ? 'bg-slate-100 dark:bg-slate-700 font-medium'
+                            : ''
+                        }`}
+                      >
+                        <div className="font-medium text-slate-900 dark:text-slate-100 truncate">
+                          {ds.name}
+                        </div>
+                        <div className="text-xs text-slate-400 dark:text-slate-500 font-mono truncate">
+                          {ds.path}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* Save button */}
-              <div className="mt-4">
+              <div className="mt-3">
                 <button
                   type="button"
                   onClick={() =>
@@ -274,9 +393,13 @@ export function Dashboard() {
                     })
                   }
                   disabled={saving}
-                  className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-md hover:bg-slate-800 dark:hover:bg-slate-200 disabled:opacity-50 transition-colors"
+                  className={`w-full px-4 py-2 text-sm rounded-md disabled:opacity-50 transition-colors ${
+                    hasUnsaved
+                      ? 'bg-amber-600 hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600 text-white animate-pulse'
+                      : 'bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white hover:bg-slate-800 dark:hover:bg-slate-200'
+                  }`}
                 >
-                  {saving ? 'Saving...' : 'Save Directories'}
+                  {saving ? 'Saving...' : hasUnsaved ? 'Save Directories (unsaved changes)' : 'Save Directories'}
                 </button>
               </div>
             </section>
