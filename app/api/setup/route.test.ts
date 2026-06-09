@@ -15,7 +15,8 @@ vi.mock('next/server', () => ({
 // --- Mock child_process ---
 const mockSpawn = vi.fn();
 vi.mock('child_process', () => ({
-  spawn: (...args: any[]) => mockSpawn(...args),
+  default: { spawn: mockSpawn },
+  spawn: mockSpawn,
 }));
 
 // --- Mock fs ---
@@ -32,6 +33,8 @@ vi.mock('path', () => ({
     resolve: (...args: string[]) => args.join('/'),
     join: (...args: string[]) => args.join('/'),
   },
+  resolve: (...args: string[]) => args.join('/'),
+  join: (...args: string[]) => args.join('/'),
 }));
 
 async function importRoute() {
