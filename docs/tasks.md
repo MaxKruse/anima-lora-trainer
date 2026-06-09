@@ -118,7 +118,7 @@ Each task follows TDD: write the failing test first, then implement minimal code
 
 ---
 
-## Phase 2: Single Training 🔄 IN PROGRESS (4/9)
+## Phase 2: Single Training ✅ COMPLETE (9/9)
 
 ### Task 2.1 ✅ — Training parameter schema (TypeScript)
 
