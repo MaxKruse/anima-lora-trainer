@@ -36,6 +36,7 @@ describe('AnimaTab', () => {
 
     // Data
     expect(screen.getByLabelText(/lora name/i) || screen.getByText(/lora name/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/resolution/i) || screen.getByText(/resolution/i)).toBeInTheDocument();
 
     // Precision & Sampling
     expect(screen.getByLabelText(/mixed precision/i) || screen.getByText(/mixed precision/i)).toBeInTheDocument();
@@ -90,6 +91,66 @@ describe('AnimaTab', () => {
     if (cacheLatentsCheckbox.tagName === 'INPUT') {
       expect(cacheLatentsCheckbox).toBeChecked();
     }
+
+    // Default resolution should be 1024
+    const resolutionInput = screen.getByLabelText(/resolution/i);
+    if (resolutionInput.tagName === 'INPUT') {
+      expect(resolutionInput).toHaveValue(1024);
+    }
+  });
+
+  it('resolution input persists value on change', async () => {
+    const AnimaTab = await importAnimaTab();
+    render(<AnimaTab onSubmit={mockOnSubmit} trainingImagesPath="/path/to/images" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Anima Training Parameters/i)).toBeInTheDocument();
+    });
+
+    const resolutionInput = screen.getByLabelText(/resolution/i);
+    expect(resolutionInput.tagName).toBe('INPUT');
+    expect(resolutionInput).toHaveValue(1024);
+
+    // Change to 768
+    fireEvent.change(resolutionInput, { target: { value: '768' } });
+    expect(resolutionInput).toHaveValue(768);
+
+    // Fill required field and submit
+    const nameInput = screen.getByLabelText(/lora name/i);
+    fireEvent.change(nameInput, { target: { value: 'test-lora' } });
+
+    const submitBtn = screen.getByRole('button');
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(mockOnSubmit).toHaveBeenCalled();
+    });
+
+    const submittedParams = mockOnSubmit.mock.calls[0][0];
+    expect(submittedParams.resolution).toBe(768);
+  });
+
+  it('submit includes resolution in params', async () => {
+    const AnimaTab = await importAnimaTab();
+    render(<AnimaTab onSubmit={mockOnSubmit} trainingImagesPath="/path/to/images" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Anima Training Parameters/i)).toBeInTheDocument();
+    });
+
+    const nameInput = screen.getByLabelText(/lora name/i);
+    fireEvent.change(nameInput, { target: { value: 'my-lora' } });
+
+    const submitBtn = screen.getByRole('button');
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(mockOnSubmit).toHaveBeenCalled();
+    });
+
+    const submittedParams = mockOnSubmit.mock.calls[0][0];
+    expect(submittedParams).toHaveProperty('resolution');
+    expect(submittedParams.resolution).toBe(1024);
   });
 
   it('submitting fires callback with correct param object', async () => {

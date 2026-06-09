@@ -59,8 +59,11 @@ def build_training_command(params: dict[str, Any]) -> list[str]:
         "--discrete_flow_shift=1.0",
         # Precision
         f"--mixed_precision={params['mixed_precision']}",
-        # Optimizations
     ]
+
+    # Optional: hard cap on total steps (overrides epochs)
+    if params.get("max_steps"):
+        cmd.append(f"--max_train_steps={params['max_steps']}")
 
     if params.get("gradient_checkpointing"):
         cmd.append("--gradient_checkpointing")

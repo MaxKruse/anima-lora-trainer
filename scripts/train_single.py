@@ -6,6 +6,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Ensure project root is on sys.path so `import scripts.X` works
+# when run as `python scripts/train_single.py` (not `python -m scripts.train_single`)
+_project_root = str(Path(__file__).resolve().parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 from scripts.command_builder import build_training_command
 from scripts.dataset_toml import generate_dataset_toml
 
@@ -36,15 +42,23 @@ def run_training(params: dict) -> dict:
         # Step 1: Generate dataset TOML
         dataset_toml_path = output_dir / "dataset.toml"
         num_images = _count_images(params["training_images"])
-        steps_per_epoch = max(100, num_images)  # Default: at least 100 steps
+
+        # Determine repeats: use explicit value, or derive from steps_per_epoch
+        user_repeats = params.get("repeats")
+        if user_repeats is not None:
+            num_repeats = user_repeats
+        else:
+            steps_per_epoch = max(100, num_images)  # Default: at least 100 steps
+            num_repeats = max(1, -(-steps_per_epoch // num_images))  # ceil division
 
         generate_dataset_toml(
             image_dir=params["training_images"],
             batch_size=params["batch_size"],
             num_images=num_images,
             epochs=params["epochs"],
-            steps_per_epoch=steps_per_epoch,
+            num_repeats=num_repeats,
             output_path=str(dataset_toml_path),
+            resolution=params.get("resolution", 1024),
         )
 
         # Step 2: Build training command

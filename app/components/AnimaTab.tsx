@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { trainingSchema, type TrainingParams } from '../lib/training-schema';
 import { MultiSelectDropdown } from './MultiSelectDropdown';
 
@@ -28,6 +28,7 @@ const DEFAULT_NETWORK_ALPHAS = ['4', '8', '16', '32', '64'];
 const DEFAULT_LEARNING_RATES = ['0.0001', '0.00005', '0.00001', '0.001'];
 const DEFAULT_BATCH_SIZES = ['1', '2', '4', '8', '16'];
 const DEFAULT_EPOCHS = ['1', '5', '10', '20', '50'];
+const DEFAULT_RESOLUTIONS = ['768', '1024'];
 
 const DEFAULT_PARAMS: Omit<TrainingParams, 'trainingImages' | 'loraName'> = {
   networkDim: 32,
@@ -35,6 +36,7 @@ const DEFAULT_PARAMS: Omit<TrainingParams, 'trainingImages' | 'loraName'> = {
   learningRate: 1e-4,
   batchSize: 1,
   epochs: 10,
+  resolution: 1024,
   optimizer: 'AdamW8Bit',
   scheduler: 'cosine',
   mixedPrecision: 'bf16',
@@ -51,6 +53,7 @@ const DEFAULT_MATRIX_VALUES: Record<string, string[]> = {
   learningRate: ['0.0001'],
   batchSize: ['1'],
   epochs: ['10'],
+  resolution: ['1024'],
   optimizer: ['AdamW8Bit'],
   scheduler: ['cosine'],
   mixedPrecision: ['bf16'],
@@ -68,6 +71,12 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
   const [matrixValues, setMatrixValues] = useState<Record<string, string[]>>(DEFAULT_MATRIX_VALUES);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+
+  // Show required-field errors immediately on mount
+  useEffect(() => {
+    validate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function updateParam<K extends keyof typeof params>(key: K, value: (typeof params)[K]) {
     setParams((prev) => ({ ...prev, [key]: value }));
@@ -176,6 +185,40 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
     );
   }
 
+  function renderOptionalNumberInput(label: string, key: string, min: number, placeholder = '') {
+    const value = (params as Record<string, any>)[key];
+    return (
+      <div key={key}>
+        <label htmlFor={key} className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+          {label}
+        </label>
+        <input
+          id={key}
+          type="number"
+          min={min}
+          value={value ?? ''}
+          placeholder={placeholder}
+          onChange={(e) => {
+            const raw = e.target.value;
+            (params as Record<string, any>)[key] = raw === '' ? undefined : parseInt(raw, 10);
+            setParams({ ...params });
+            if (errors[key]) {
+              setErrors((prev) => {
+                const next = { ...prev };
+                delete next[key];
+                return next;
+              });
+            }
+          }}
+          className={`w-full px-3 py-2 border rounded-md text-sm bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 ${
+            errors[key] ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
+          } focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500`}
+        />
+        {errors[key] && <p className="text-red-500 dark:text-red-400 text-xs mt-1">{errors[key]}</p>}
+      </div>
+    );
+  }
+
   function renderSelect(label: string, key: keyof typeof params, options: string[]) {
     return (
       <div key={key}>
@@ -215,11 +258,11 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
     );
   }
 
-  function renderTextInput(label: string, key: keyof typeof params, placeholder = '') {
+  function renderTextInput(label: string, key: keyof typeof params, placeholder = '', required = false) {
     return (
       <div key={key}>
         <label htmlFor={key} className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-          {label}
+          {label}{required && <span className="text-red-500 ml-1">*</span>}
         </label>
         <input
           id={key}
@@ -228,7 +271,7 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
           onChange={(e) => updateParam(key, e.target.value)}
           placeholder={placeholder}
           className={`w-full px-3 py-2 border rounded-md text-sm bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 ${
-            errors[key] ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
+            errors[key] ? 'border-red-500 focus:ring-red-500' : 'border-slate-300 dark:border-slate-600'
           } focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500`}
         />
         {errors[key] && <p className="text-red-500 dark:text-red-400 text-xs mt-1">{errors[key]}</p>}
@@ -252,122 +295,133 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-6">
+    <div>
       <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 mb-6">
         Anima Training Parameters
       </h2>
 
-      <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} className="space-y-6">
-        {/* Network Parameters */}
-        <section>
-          <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
-            Network
-          </h3>
-          <div className="grid grid-cols-2 gap-4">
-            {matrixMode ? (
-              <>
-                {renderMultiSelect('Network Dim', 'networkDim', DEFAULT_NETWORK_DIMS)}
-                {renderMultiSelect('Network Alpha', 'networkAlpha', DEFAULT_NETWORK_ALPHAS)}
-              </>
-            ) : (
-              <>
-                {renderNumberInput('Network Dim', 'networkDim', 1)}
-                {renderNumberInput('Network Alpha', 'networkAlpha', 0)}
-              </>
-            )}
-          </div>
-        </section>
+      <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
+        {/* Top row: Network + Training + Optimizer/Scheduler side by side */}
+        <div className="grid grid-cols-3 gap-8">
+          {/* Network Parameters */}
+          <section>
+            <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
+              Network
+            </h3>
+            <div className="space-y-3">
+              {matrixMode ? (
+                <>
+                  {renderMultiSelect('Network Dim', 'networkDim', DEFAULT_NETWORK_DIMS)}
+                  {renderMultiSelect('Network Alpha', 'networkAlpha', DEFAULT_NETWORK_ALPHAS)}
+                </>
+              ) : (
+                <>
+                  {renderNumberInput('Network Dim', 'networkDim', 1)}
+                  {renderNumberInput('Network Alpha', 'networkAlpha', 0)}
+                </>
+              )}
+            </div>
+          </section>
 
-        {/* Training Parameters */}
-        <section>
-          <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
-            Training
-          </h3>
-          <div className="grid grid-cols-3 gap-4">
-            {matrixMode ? (
-              <>
-                {renderMultiSelect('Learning Rate', 'learningRate', DEFAULT_LEARNING_RATES)}
-                {renderMultiSelect('Batch Size', 'batchSize', DEFAULT_BATCH_SIZES)}
-                {renderMultiSelect('Epochs', 'epochs', DEFAULT_EPOCHS)}
-              </>
-            ) : (
-              <>
-                {renderNumberInput('Learning Rate', 'learningRate', 0, 0.0001)}
-                {renderNumberInput('Batch Size', 'batchSize', 1)}
-                {renderNumberInput('Epochs', 'epochs', 1)}
-              </>
-            )}
-          </div>
-        </section>
+          {/* Training Parameters */}
+          <section>
+            <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
+              Training
+            </h3>
+            <div className="space-y-3">
+              {matrixMode ? (
+                <>
+                  {renderMultiSelect('Learning Rate', 'learningRate', DEFAULT_LEARNING_RATES)}
+                  {renderMultiSelect('Batch Size', 'batchSize', DEFAULT_BATCH_SIZES)}
+                  {renderMultiSelect('Epochs', 'epochs', DEFAULT_EPOCHS)}
+                </>
+              ) : (
+                <>
+                  {renderNumberInput('Learning Rate', 'learningRate', 0, 0.0001)}
+                  {renderNumberInput('Batch Size', 'batchSize', 1)}
+                  {renderNumberInput('Epochs', 'epochs', 1)}
+                  {renderOptionalNumberInput('Max Steps (optional)', 'maxSteps', 1, 'Capped by epochs if empty')}
+                  {renderOptionalNumberInput('Repeats per image (optional)', 'repeats', 1, 'Auto-calculated if empty')}
+                </>
+              )}
+            </div>
+          </section>
 
-        {/* Optimizer & Scheduler */}
-        <section>
-          <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
-            Optimizer & Scheduler
-          </h3>
-          <div className="grid grid-cols-2 gap-4">
-            {matrixMode ? (
-              <>
-                {renderMultiSelect('Optimizer', 'optimizer', OPTIMIZERS)}
-                {renderMultiSelect('Scheduler', 'scheduler', SCHEDULERS)}
-              </>
-            ) : (
-              <>
-                {renderSelect('Optimizer', 'optimizer', OPTIMIZERS)}
-                {renderSelect('Scheduler', 'scheduler', SCHEDULERS)}
-              </>
-            )}
-          </div>
-        </section>
+          {/* Optimizer & Scheduler */}
+          <section>
+            <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
+              Optimizer & Scheduler
+            </h3>
+            <div className="space-y-3">
+              {matrixMode ? (
+                <>
+                  {renderMultiSelect('Optimizer', 'optimizer', OPTIMIZERS)}
+                  {renderMultiSelect('Scheduler', 'scheduler', SCHEDULERS)}
+                </>
+              ) : (
+                <>
+                  {renderSelect('Optimizer', 'optimizer', OPTIMIZERS)}
+                  {renderSelect('Scheduler', 'scheduler', SCHEDULERS)}
+                </>
+              )}
+            </div>
+          </section>
+        </div>
 
-        {/* Data */}
-        <section>
-          <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
-            Data
-          </h3>
-          <div className="grid grid-cols-1 gap-4 max-w-sm">
-            {renderTextInput('LoRA Name', 'loraName', 'my-lora')}
-          </div>
-        </section>
+        {/* Bottom row: Data + Precision/Sampling + Optimizations side by side */}
+        <div className="grid grid-cols-3 gap-8 mt-8">
+          {/* Data */}
+          <section>
+            <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
+              Data
+            </h3>
+            <div className="space-y-3">
+              {renderTextInput('LoRA Name', 'loraName', 'my-lora', true)}
+              {matrixMode
+                ? renderMultiSelect('Resolution', 'resolution', DEFAULT_RESOLUTIONS)
+                : renderNumberInput('Resolution', 'resolution', 256)}
+            </div>
+          </section>
 
-        {/* Precision & Sampling */}
-        <section>
-          <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
-            Precision & Sampling
-          </h3>
-          <div className="grid grid-cols-2 gap-4">
-            {matrixMode ? (
-              <>
-                {renderMultiSelect('Mixed Precision', 'mixedPrecision', MIXED_PRECISIONS)}
-                {renderMultiSelect('Timestep Sampling', 'timestepSampling', TIMESTEP_SAMPLINGS)}
-              </>
-            ) : (
-              <>
-                {renderSelect('Mixed Precision', 'mixedPrecision', MIXED_PRECISIONS)}
-                {renderSelect('Timestep Sampling', 'timestepSampling', TIMESTEP_SAMPLINGS)}
-              </>
-            )}
-          </div>
-        </section>
+          {/* Precision & Sampling */}
+          <section>
+            <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
+              Precision & Sampling
+            </h3>
+            <div className="space-y-3">
+              {matrixMode ? (
+                <>
+                  {renderMultiSelect('Mixed Precision', 'mixedPrecision', MIXED_PRECISIONS)}
+                  {renderMultiSelect('Timestep Sampling', 'timestepSampling', TIMESTEP_SAMPLINGS)}
+                </>
+              ) : (
+                <>
+                  {renderSelect('Mixed Precision', 'mixedPrecision', MIXED_PRECISIONS)}
+                  {renderSelect('Timestep Sampling', 'timestepSampling', TIMESTEP_SAMPLINGS)}
+                </>
+              )}
+            </div>
+          </section>
 
-        {/* Optimizations */}
-        <section>
-          <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
-            Optimizations
-          </h3>
-          <div className="space-y-2">
-            {renderCheckbox('Gradient Checkpointing', 'gradientCheckpointing')}
-            {renderCheckbox('Cache Latents', 'cacheLatents')}
-            {renderCheckbox('Cache Text Encoder', 'cacheTextEncoder')}
-          </div>
-        </section>
+          {/* Optimizations */}
+          <section>
+            <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
+              Optimizations
+            </h3>
+            <div className="space-y-2">
+              {renderCheckbox('Gradient Checkpointing', 'gradientCheckpointing')}
+              {renderCheckbox('Cache Latents', 'cacheLatents')}
+              {renderCheckbox('Cache Text Encoder', 'cacheTextEncoder')}
+            </div>
+          </section>
+        </div>
 
         {/* Submit */}
-        <div className="pt-4">
+        <div className="pt-6">
           <button
             type="submit"
             disabled={submitting}
-            className="px-6 py-2 bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-md hover:bg-slate-800 dark:hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full px-6 py-2 bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-md hover:bg-slate-800 dark:hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {submitting ? 'Starting...' : 'Start Training'}
           </button>

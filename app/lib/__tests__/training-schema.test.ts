@@ -124,4 +124,79 @@ describe('trainingSchema', () => {
       expect(result.success, `Timestep sampling ${ts} should be valid`).toBe(true);
     }
   });
+
+  // --- resolution ---
+  it('defaults resolution to 1024 when omitted', async () => {
+    const schema = await importSchema();
+    const result = schema.safeParse(validParams);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.resolution).toBe(1024);
+    }
+  });
+
+  it('accepts valid resolution values', async () => {
+    const schema = await importSchema();
+    for (const res of [256, 512, 768, 1024, 2048]) {
+      const result = schema.safeParse({ ...validParams, resolution: res });
+      expect(result.success, `Resolution ${res} should be valid`).toBe(true);
+      if (result.success) expect(result.data.resolution).toBe(res);
+    }
+  });
+
+  it('rejects resolution below 256', async () => {
+    const schema = await importSchema();
+    const result = schema.safeParse({ ...validParams, resolution: 128 });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects non-integer resolution', async () => {
+    const schema = await importSchema();
+    const result = schema.safeParse({ ...validParams, resolution: 768.5 });
+    expect(result.success).toBe(false);
+  });
+
+  // --- maxSteps (optional) ---
+  it('accepts valid maxSteps', async () => {
+    const schema = await importSchema();
+    const result = schema.safeParse({ ...validParams, maxSteps: 500 });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.maxSteps).toBe(500);
+  });
+
+  it('accepts omitted maxSteps', async () => {
+    const schema = await importSchema();
+    const params = { ...validParams };
+    delete (params as any).maxSteps;
+    const result = schema.safeParse(params);
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects maxSteps below 1', async () => {
+    const schema = await importSchema();
+    const result = schema.safeParse({ ...validParams, maxSteps: 0 });
+    expect(result.success).toBe(false);
+  });
+
+  // --- repeats (optional) ---
+  it('accepts valid repeats', async () => {
+    const schema = await importSchema();
+    const result = schema.safeParse({ ...validParams, repeats: 10 });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.repeats).toBe(10);
+  });
+
+  it('accepts omitted repeats', async () => {
+    const schema = await importSchema();
+    const params = { ...validParams };
+    delete (params as any).repeats;
+    const result = schema.safeParse(params);
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects repeats below 1', async () => {
+    const schema = await importSchema();
+    const result = schema.safeParse({ ...validParams, repeats: 0 });
+    expect(result.success).toBe(false);
+  });
 });

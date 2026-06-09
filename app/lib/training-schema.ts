@@ -9,6 +9,8 @@ export const trainingSchema = z.object({
   learningRate: z.number().min(0),
   batchSize: z.number().int().min(1),
   epochs: z.number().int().min(1),
+  maxSteps: z.number().int().min(1).optional(),
+  repeats: z.number().int().min(1).optional(),
 
   // Optimizer
   optimizer: z.enum(['AdamW8Bit', 'AdamW', 'Prodigy', 'Lion', 'Adafactor']),
@@ -19,6 +21,7 @@ export const trainingSchema = z.object({
   // Data
   trainingImages: z.string().min(1),
   loraName: z.string().min(1),
+  resolution: z.number().int().min(256).default(1024),
 
   // Precision
   mixedPrecision: z.enum(['fp16', 'bf16', 'no']),
