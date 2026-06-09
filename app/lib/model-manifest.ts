@@ -2,7 +2,6 @@ export interface ModelEntry {
   name: string;
   hfRepo: string;
   hfFile: string;
-  localPath: string;
 }
 
 export interface ResolvedModelEntry extends ModelEntry {
@@ -16,19 +15,16 @@ const ANIMA_MODELS: ModelEntry[] = [
     name: 'diffusion_model',
     hfRepo: 'circlestone-labs/Anima',
     hfFile: 'split_files/diffusion_models/anima-base-v1.0.safetensors',
-    localPath: 'models/anima/diffusion_models/anima-base-v1.0.safetensors',
   },
   {
     name: 'vae',
     hfRepo: 'circlestone-labs/Anima',
     hfFile: 'split_files/vae/qwen_image_vae.safetensors',
-    localPath: 'models/anima/vae/qwen_image_vae.safetensors',
   },
   {
     name: 'text_encoder',
     hfRepo: 'circlestone-labs/Anima',
     hfFile: 'split_files/text_encoders/qwen_3_06b_base.safetensors',
-    localPath: 'models/anima/text_encoders/qwen_3_06b_base.safetensors',
   },
 ];
 

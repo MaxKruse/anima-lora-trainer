@@ -7,20 +7,12 @@ describe('getModelManifest', () => {
     expect(manifest).toHaveLength(3);
   });
 
-  it('each entry has name, hfRepo, hfFile, and localPath', () => {
+  it('each entry has name, hfRepo, and hfFile', () => {
     const manifest = getModelManifest('anima');
     for (const entry of manifest) {
       expect(entry).toHaveProperty('name');
       expect(entry).toHaveProperty('hfRepo');
       expect(entry).toHaveProperty('hfFile');
-      expect(entry).toHaveProperty('localPath');
-    }
-  });
-
-  it('local paths are under models/anima/', () => {
-    const manifest = getModelManifest('anima');
-    for (const entry of manifest) {
-      expect(entry.localPath).toMatch(/^models\/anima\//);
     }
   });
 
@@ -29,7 +21,7 @@ describe('getModelManifest', () => {
     const diffusion = manifest.find(e => e.name === 'diffusion_model');
     expect(diffusion).toBeDefined();
     expect(diffusion!.hfRepo).toBe('circlestone-labs/Anima');
-    expect(diffusion!.localPath).toContain('diffusion_models');
+    expect(diffusion!.hfFile).toContain('diffusion_models');
   });
 
   it('includes VAE entry', () => {
@@ -37,7 +29,7 @@ describe('getModelManifest', () => {
     const vae = manifest.find(e => e.name === 'vae');
     expect(vae).toBeDefined();
     expect(vae!.hfRepo).toBe('circlestone-labs/Anima');
-    expect(vae!.localPath).toContain('vae');
+    expect(vae!.hfFile).toContain('vae');
   });
 
   it('includes text encoder entry', () => {
@@ -45,7 +37,7 @@ describe('getModelManifest', () => {
     const te = manifest.find(e => e.name === 'text_encoder');
     expect(te).toBeDefined();
     expect(te!.hfRepo).toBe('circlestone-labs/Anima');
-    expect(te!.localPath).toContain('text_encoders');
+    expect(te!.hfFile).toContain('text_encoders');
   });
 
   it('throws for unknown model type', () => {

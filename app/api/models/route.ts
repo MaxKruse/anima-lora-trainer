@@ -28,34 +28,36 @@ export async function GET() {
         const active = activeDownloads.get(entry.name);
         const isActive = !!active;
 
-        // Determine status — check in-memory state first, then disk state
+        // Determine status — check in-memory state first, then cache state
         let modelStatus: 'pending' | 'downloading' | 'downloaded';
         if (isActive) {
           modelStatus = 'downloading';
         } else if (status.exists && status.downloadPercent === 100) {
           modelStatus = 'downloaded';
         } else if (status.exists && status.downloadPercent! > 0) {
-          // Partial file on disk (e.g., after server restart mid-download)
+          // Partial file in cache (e.g., after server restart mid-download)
           modelStatus = 'downloading';
         } else {
           modelStatus = 'pending';
         }
 
         // Use in-memory progress from the onProgress callback when available,
-        // otherwise fall back to file-size-based progress from disk
+        // otherwise fall back to file-size-based progress from cache
         const progress = isActive ? active.progress : (status.downloadPercent || 0);
 
         console.log(`[models:GET] ${entry.name}: status=${modelStatus}, progress=${progress}%, exists=${status.exists}, sizeBytes=${status.sizeBytes}, expectedSizeBytes=${entry.expectedSizeBytes}, isActive=${isActive}, activeError=${active?.error ?? 'none'}`);
 
         return {
           name: entry.name,
-          localPath: entry.localPath,
+          hfRepo: entry.hfRepo,
+          hfFile: entry.hfFile,
           expectedSizeBytes: entry.expectedSizeBytes,
           status: modelStatus,
           progress,
           sizeBytes: status.sizeBytes,
           canAbort: isActive,
           error: active?.error,
+          cachePath: status.cachePath,
         };
       })
     );
@@ -101,7 +103,7 @@ export async function POST(request: Request) {
       );
     }
 
-    console.log(`[models:POST] Found entry: hfRepo=${entry.hfRepo}, hfFile=${entry.hfFile}, localPath=${entry.localPath}`);
+    console.log(`[models:POST] Found entry: hfRepo=${entry.hfRepo}, hfFile=${entry.hfFile}`);
 
     // Check if already downloaded
     const status = await checkModelStatus(entry);

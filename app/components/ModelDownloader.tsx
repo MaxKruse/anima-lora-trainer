@@ -4,13 +4,13 @@ import { useState, useEffect, useCallback } from 'react';
 
 interface ModelStatus {
   name: string;
-  localPath: string;
   expectedSizeBytes: number;
   status: 'pending' | 'downloading' | 'downloaded';
   progress: number;
   sizeBytes?: number;
   canAbort?: boolean;
   error?: string;
+  cachePath?: string;
 }
 
 const CIRCLE_SIZE = 40;
