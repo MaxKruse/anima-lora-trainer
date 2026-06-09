@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { trainingSchema, type TrainingParams } from '../lib/training-schema';
+import { MultiSelectDropdown } from './MultiSelectDropdown';
 
 interface AnimaTabProps {
   onSubmit: (params: TrainingParams) => void;
@@ -10,12 +11,23 @@ interface AnimaTabProps {
    * is hidden (managed by the parent directory picker).
    */
   trainingImagesPath?: string;
+  /**
+   * When true, render multi-select dropdowns for parameter inputs
+   * to support matrix training (multiple values per parameter).
+   */
+  matrixMode?: boolean;
 }
 
 const OPTIMIZERS = ['AdamW8Bit', 'AdamW', 'Prodigy', 'Lion', 'Adafactor'];
 const SCHEDULERS = ['constant', 'cosine', 'linear', 'constant_with_warmup', 'cosine_with_restarts'];
 const MIXED_PRECISIONS = ['fp16', 'bf16', 'no'];
 const TIMESTEP_SAMPLINGS = ['sigma', 'uniform', 'sigmoid', 'shift', 'flux_shift'];
+
+const DEFAULT_NETWORK_DIMS = ['8', '16', '32', '64', '128', '256'];
+const DEFAULT_NETWORK_ALPHAS = ['4', '8', '16', '32', '64'];
+const DEFAULT_LEARNING_RATES = ['0.0001', '0.00005', '0.00001', '0.001'];
+const DEFAULT_BATCH_SIZES = ['1', '2', '4', '8', '16'];
+const DEFAULT_EPOCHS = ['1', '5', '10', '20', '50'];
 
 const DEFAULT_PARAMS: Omit<TrainingParams, 'trainingImages' | 'loraName'> = {
   networkDim: 32,
@@ -32,19 +44,44 @@ const DEFAULT_PARAMS: Omit<TrainingParams, 'trainingImages' | 'loraName'> = {
   cacheTextEncoder: true,
 };
 
-export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
+// Default matrix values (single value arrays for initial state)
+const DEFAULT_MATRIX_VALUES: Record<string, string[]> = {
+  networkDim: ['32'],
+  networkAlpha: ['16'],
+  learningRate: ['0.0001'],
+  batchSize: ['1'],
+  epochs: ['10'],
+  optimizer: ['AdamW8Bit'],
+  scheduler: ['cosine'],
+  mixedPrecision: ['bf16'],
+  timestepSampling: ['sigmoid'],
+};
+
+export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: AnimaTabProps) {
   const isManagedExternally = trainingImagesPath !== undefined;
   const [params, setParams] = useState({
     ...DEFAULT_PARAMS,
     trainingImages: trainingImagesPath || '',
     loraName: '',
   });
+  // Matrix mode: multi-value params stored as string arrays
+  const [matrixValues, setMatrixValues] = useState<Record<string, string[]>>(DEFAULT_MATRIX_VALUES);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
   function updateParam<K extends keyof typeof params>(key: K, value: (typeof params)[K]) {
     setParams((prev) => ({ ...prev, [key]: value }));
-    // Clear error for this field
+    if (errors[key]) {
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+  }
+
+  function updateMatrixParam(key: string, values: string[]) {
+    setMatrixValues((prev) => ({ ...prev, [key]: values }));
     if (errors[key]) {
       setErrors((prev) => {
         const next = { ...prev };
@@ -63,17 +100,27 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
     if (!params.loraName.trim()) {
       newErrors.loraName = 'LoRA name is required';
     }
-    if (params.networkDim < 1) {
-      newErrors.networkDim = 'Network dim must be at least 1';
-    }
-    if (params.epochs < 1) {
-      newErrors.epochs = 'Epochs must be at least 1';
-    }
-    if (params.batchSize < 1) {
-      newErrors.batchSize = 'Batch size must be at least 1';
-    }
-    if (params.learningRate < 0) {
-      newErrors.learningRate = 'Learning rate must be non-negative';
+
+    if (matrixMode) {
+      // Validate matrix values have at least one entry for each param
+      for (const [key, values] of Object.entries(matrixValues)) {
+        if (values.length === 0) {
+          newErrors[key] = `At least one value is required for ${key}`;
+        }
+      }
+    } else {
+      if (params.networkDim < 1) {
+        newErrors.networkDim = 'Network dim must be at least 1';
+      }
+      if (params.epochs < 1) {
+        newErrors.epochs = 'Epochs must be at least 1';
+      }
+      if (params.batchSize < 1) {
+        newErrors.batchSize = 'Batch size must be at least 1';
+      }
+      if (params.learningRate < 0) {
+        newErrors.learningRate = 'Learning rate must be non-negative';
+      }
     }
 
     setErrors(newErrors);
@@ -85,12 +132,10 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
 
     setSubmitting(true);
     try {
-      // Use external path if provided
       const finalParams = isManagedExternally
         ? { ...params, trainingImages: trainingImagesPath! }
         : params;
 
-      // Validate against zod schema
       const result = trainingSchema.safeParse(finalParams);
       if (!result.success) {
         const zodErrors: Record<string, string> = {};
@@ -108,6 +153,7 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
     }
   }
 
+  // Single-mode renderers
   function renderNumberInput(label: string, key: keyof typeof params, min: number, step = 1) {
     return (
       <div key={key}>
@@ -190,9 +236,26 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
     );
   }
 
+  // Matrix-mode multi-select renderer
+  function renderMultiSelect(label: string, key: string, presets: string[]) {
+    return (
+      <div key={key}>
+        <MultiSelectDropdown
+          label={label}
+          value={matrixValues[key] || []}
+          presets={presets}
+          onChange={(values) => updateMatrixParam(key, values)}
+        />
+        {errors[key] && <p className="text-red-500 dark:text-red-400 text-xs mt-1">{errors[key]}</p>}
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-4xl mx-auto p-6">
-      <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 mb-6">Anima Training Parameters</h2>
+      <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 mb-6">
+        Anima Training Parameters
+      </h2>
 
       <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} className="space-y-6">
         {/* Network Parameters */}
@@ -201,8 +264,17 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
             Network
           </h3>
           <div className="grid grid-cols-2 gap-4">
-            {renderNumberInput('Network Dim', 'networkDim', 1)}
-            {renderNumberInput('Network Alpha', 'networkAlpha', 0)}
+            {matrixMode ? (
+              <>
+                {renderMultiSelect('Network Dim', 'networkDim', DEFAULT_NETWORK_DIMS)}
+                {renderMultiSelect('Network Alpha', 'networkAlpha', DEFAULT_NETWORK_ALPHAS)}
+              </>
+            ) : (
+              <>
+                {renderNumberInput('Network Dim', 'networkDim', 1)}
+                {renderNumberInput('Network Alpha', 'networkAlpha', 0)}
+              </>
+            )}
           </div>
         </section>
 
@@ -212,9 +284,19 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
             Training
           </h3>
           <div className="grid grid-cols-3 gap-4">
-            {renderNumberInput('Learning Rate', 'learningRate', 0, 0.0001)}
-            {renderNumberInput('Batch Size', 'batchSize', 1)}
-            {renderNumberInput('Epochs', 'epochs', 1)}
+            {matrixMode ? (
+              <>
+                {renderMultiSelect('Learning Rate', 'learningRate', DEFAULT_LEARNING_RATES)}
+                {renderMultiSelect('Batch Size', 'batchSize', DEFAULT_BATCH_SIZES)}
+                {renderMultiSelect('Epochs', 'epochs', DEFAULT_EPOCHS)}
+              </>
+            ) : (
+              <>
+                {renderNumberInput('Learning Rate', 'learningRate', 0, 0.0001)}
+                {renderNumberInput('Batch Size', 'batchSize', 1)}
+                {renderNumberInput('Epochs', 'epochs', 1)}
+              </>
+            )}
           </div>
         </section>
 
@@ -224,8 +306,17 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
             Optimizer & Scheduler
           </h3>
           <div className="grid grid-cols-2 gap-4">
-            {renderSelect('Optimizer', 'optimizer', OPTIMIZERS)}
-            {renderSelect('Scheduler', 'scheduler', SCHEDULERS)}
+            {matrixMode ? (
+              <>
+                {renderMultiSelect('Optimizer', 'optimizer', OPTIMIZERS)}
+                {renderMultiSelect('Scheduler', 'scheduler', SCHEDULERS)}
+              </>
+            ) : (
+              <>
+                {renderSelect('Optimizer', 'optimizer', OPTIMIZERS)}
+                {renderSelect('Scheduler', 'scheduler', SCHEDULERS)}
+              </>
+            )}
           </div>
         </section>
 
@@ -258,8 +349,17 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
             Precision & Sampling
           </h3>
           <div className="grid grid-cols-2 gap-4">
-            {renderSelect('Mixed Precision', 'mixedPrecision', MIXED_PRECISIONS)}
-            {renderSelect('Timestep Sampling', 'timestepSampling', TIMESTEP_SAMPLINGS)}
+            {matrixMode ? (
+              <>
+                {renderMultiSelect('Mixed Precision', 'mixedPrecision', MIXED_PRECISIONS)}
+                {renderMultiSelect('Timestep Sampling', 'timestepSampling', TIMESTEP_SAMPLINGS)}
+              </>
+            ) : (
+              <>
+                {renderSelect('Mixed Precision', 'mixedPrecision', MIXED_PRECISIONS)}
+                {renderSelect('Timestep Sampling', 'timestepSampling', TIMESTEP_SAMPLINGS)}
+              </>
+            )}
           </div>
         </section>
 

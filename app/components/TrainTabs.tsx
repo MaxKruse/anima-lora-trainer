@@ -9,6 +9,7 @@ export type ModelType = 'anima' | 'flux' | 'sd3' | 'sdxl' | 'sd15' | 'hunyuan' |
 interface TrainTabsProps {
   onSubmit: (params: TrainingParams) => void;
   trainingImagesPath?: string;
+  matrixMode?: boolean;
 }
 
 const MODEL_TABS: { key: ModelType; label: string }[] = [
@@ -38,7 +39,7 @@ function ComingSoonTab({ modelLabel }: { modelLabel: string }) {
   );
 }
 
-export function TrainTabs({ onSubmit, trainingImagesPath }: TrainTabsProps) {
+export function TrainTabs({ onSubmit, trainingImagesPath, matrixMode = false }: TrainTabsProps) {
   const [activeTab, setActiveTab] = useState<ModelType>('anima');
 
   return (
@@ -68,6 +69,7 @@ export function TrainTabs({ onSubmit, trainingImagesPath }: TrainTabsProps) {
           <AnimaTab
             onSubmit={onSubmit}
             trainingImagesPath={trainingImagesPath}
+            matrixMode={matrixMode}
           />
         ) : (
           <ComingSoonTab

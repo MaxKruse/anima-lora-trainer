@@ -227,6 +227,7 @@ export function Dashboard() {
               <TrainTabs
                 trainingImagesPath={config.trainingImagesDir}
                 onSubmit={handleTrainingSubmit}
+                matrixMode={matrixMode === 'matrix'}
               />
 
               {trainingResponse && (
