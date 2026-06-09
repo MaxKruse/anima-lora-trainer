@@ -125,7 +125,7 @@ export function DirectoryPicker({
     <div className="space-y-2">
       <label
         htmlFor={id}
-        className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+        className="block text-sm font-medium text-slate-700 dark:text-slate-300"
       >
         {label}
       </label>
@@ -141,14 +141,14 @@ export function DirectoryPicker({
             setVerifyStatus(null);
           }}
           placeholder={placeholder}
-          className={`flex-1 px-3 py-2 border rounded-md text-sm font-mono bg-white dark:bg-gray-900 dark:text-gray-100 ${
+          className={`flex-1 px-3 py-2 border rounded-md text-sm font-mono bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 ${
             error
               ? 'border-red-500 focus:ring-red-500'
               : verifyStatus === 'ok'
                 ? 'border-green-500 focus:ring-green-500'
                 : verifyStatus === 'fail'
                   ? 'border-yellow-500 focus:ring-yellow-500'
-                  : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500'
+                  : 'border-slate-300 dark:border-slate-600 focus:ring-slate-400 dark:focus:ring-slate-500'
           } focus:outline-none focus:ring-2`}
         />
 
@@ -156,7 +156,7 @@ export function DirectoryPicker({
           <button
             type="button"
             onClick={handleBrowse}
-            className="px-3 py-2 text-sm bg-gray-100 dark:bg-gray-800 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors whitespace-nowrap"
+            className="px-3 py-2 text-sm bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-600 rounded-md hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors whitespace-nowrap"
             title="Open folder picker"
           >
             Browse
@@ -168,7 +168,7 @@ export function DirectoryPicker({
             type="button"
             onClick={handleVerify}
             disabled={verifying || !value.trim()}
-            className="px-3 py-2 text-sm bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+            className="px-3 py-2 text-sm bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-600 rounded-md hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
             title="Check if directory exists"
           >
             {verifying ? '...' : 'Check'}
@@ -176,13 +176,13 @@ export function DirectoryPicker({
         )}
 
         {autoVerify && verifying && (
-          <span className="px-2 py-1 text-sm text-gray-400">
+          <span className="px-2 py-1 text-sm text-slate-400 dark:text-slate-500">
             ...
           </span>
         )}
 
         {autoVerify && !verifying && verifyStatus === null && value.trim() && (
-          <span className="px-2 py-1 text-sm text-gray-400">
+          <span className="px-2 py-1 text-sm text-slate-400 dark:text-slate-500">
             ...
           </span>
         )}
@@ -191,7 +191,7 @@ export function DirectoryPicker({
           <button
             type="button"
             onClick={handleClear}
-            className="px-2 py-2 text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+            className="px-2 py-2 text-sm text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
             title="Clear"
           >
             ✕
@@ -207,16 +207,16 @@ export function DirectoryPicker({
       )}
       {verifyStatus === 'fail' && (
         <p className="text-xs text-yellow-600 dark:text-yellow-400 flex items-center gap-1">
-          <span>⚠</span> Directory not found or inaccessible
+          <span>!</span> Directory not found or inaccessible
         </p>
       )}
 
       {error && (
-        <p className="text-xs text-red-500">{error}</p>
+        <p className="text-xs text-red-500 dark:text-red-400">{error}</p>
       )}
 
       {hint && !error && verifyStatus !== 'fail' && (
-        <p className="text-xs text-gray-400">{hint}</p>
+        <p className="text-xs text-slate-400 dark:text-slate-500">{hint}</p>
       )}
     </div>
   );

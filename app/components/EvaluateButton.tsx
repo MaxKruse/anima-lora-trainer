@@ -78,19 +78,19 @@ export function EvaluateButton({
   }
 
   return (
-    <div className="evaluate-button-container">
+    <div className="flex flex-col gap-2">
       <button
         onClick={handleEvaluate}
         disabled={isEvaluating}
-        className="evaluate-button"
+        className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-md hover:bg-slate-800 dark:hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
         {isEvaluating ? 'Evaluating...' : 'Evaluate'}
       </button>
 
-      {error && <span className="error-text">{error}</span>}
+      {error && <span className="text-red-600 dark:text-red-400 text-sm">{error}</span>}
 
       {isEvaluating && (
-        <span className="evaluating-status">Evaluating LoRAs...</span>
+        <span className="text-slate-500 dark:text-slate-400 text-sm">Evaluating LoRAs...</span>
       )}
     </div>
   );

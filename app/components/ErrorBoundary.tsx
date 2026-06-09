@@ -40,12 +40,17 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       const message = this.props.errorMessage || this.state.error?.message || 'An unexpected error occurred';
 
       return (
-        <div className="error-boundary">
-          <div className="error-content">
-            <h2 className="error-title">Something went wrong</h2>
-            <p className="error-message">{message}</p>
+        <div className="flex items-center justify-center min-h-[200px] p-6">
+          <div className="text-center border border-red-200 dark:border-red-800 rounded-lg bg-red-50 dark:bg-red-900/20 p-6 max-w-md">
+            <h2 className="text-lg font-semibold text-red-800 dark:text-red-400 mb-2">
+              Something went wrong
+            </h2>
+            <p className="text-sm text-red-700 dark:text-red-400 mb-4">{message}</p>
             {this.props.onRetry && (
-              <button onClick={this.handleRetry} className="retry-button">
+              <button
+                onClick={this.handleRetry}
+                className="px-4 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+              >
                 Retry
               </button>
             )}

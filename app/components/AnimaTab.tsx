@@ -111,7 +111,7 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
   function renderNumberInput(label: string, key: keyof typeof params, min: number, step = 1) {
     return (
       <div key={key}>
-        <label htmlFor={key} className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor={key} className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
           {label}
         </label>
         <input
@@ -121,11 +121,11 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
           step={step}
           value={params[key] as number}
           onChange={(e) => updateParam(key, parseFloat(e.target.value) || 0)}
-          className={`w-full px-3 py-2 border rounded-md text-sm ${
-            errors[key] ? 'border-red-500' : 'border-gray-300'
-          }`}
+          className={`w-full px-3 py-2 border rounded-md text-sm bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 ${
+            errors[key] ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
+          } focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500`}
         />
-        {errors[key] && <p className="text-red-500 text-xs mt-1">{errors[key]}</p>}
+        {errors[key] && <p className="text-red-500 dark:text-red-400 text-xs mt-1">{errors[key]}</p>}
       </div>
     );
   }
@@ -133,14 +133,14 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
   function renderSelect(label: string, key: keyof typeof params, options: string[]) {
     return (
       <div key={key}>
-        <label htmlFor={key} className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor={key} className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
           {label}
         </label>
         <select
           id={key}
           value={params[key] as string}
           onChange={(e) => updateParam(key, e.target.value as any)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+          className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md text-sm bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500"
         >
           {options.map((opt) => (
             <option key={opt} value={opt}>
@@ -160,9 +160,9 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
           type="checkbox"
           checked={params[key] as boolean}
           onChange={(e) => updateParam(key, e.target.checked)}
-          className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+          className="h-4 w-4 text-slate-900 dark:text-slate-100 border-slate-300 dark:border-slate-600 rounded focus:ring-slate-400 dark:focus:ring-slate-500"
         />
-        <label htmlFor={key} className="ml-2 text-sm text-gray-700">
+        <label htmlFor={key} className="ml-2 text-sm text-slate-700 dark:text-slate-300">
           {label}
         </label>
       </div>
@@ -172,7 +172,7 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
   function renderTextInput(label: string, key: keyof typeof params, placeholder = '') {
     return (
       <div key={key}>
-        <label htmlFor={key} className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor={key} className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
           {label}
         </label>
         <input
@@ -181,23 +181,23 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
           value={params[key] as string}
           onChange={(e) => updateParam(key, e.target.value)}
           placeholder={placeholder}
-          className={`w-full px-3 py-2 border rounded-md text-sm ${
-            errors[key] ? 'border-red-500' : 'border-gray-300'
-          }`}
+          className={`w-full px-3 py-2 border rounded-md text-sm bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 ${
+            errors[key] ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
+          } focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500`}
         />
-        {errors[key] && <p className="text-red-500 text-xs mt-1">{errors[key]}</p>}
+        {errors[key] && <p className="text-red-500 dark:text-red-400 text-xs mt-1">{errors[key]}</p>}
       </div>
     );
   }
 
   return (
     <div className="max-w-4xl mx-auto p-6">
-      <h2 className="text-xl font-bold mb-6">Anima Training Parameters</h2>
+      <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 mb-6">Anima Training Parameters</h2>
 
       <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} className="space-y-6">
         {/* Network Parameters */}
         <section>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+          <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
             Network
           </h3>
           <div className="grid grid-cols-2 gap-4">
@@ -208,7 +208,7 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
 
         {/* Training Parameters */}
         <section>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+          <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
             Training
           </h3>
           <div className="grid grid-cols-3 gap-4">
@@ -220,7 +220,7 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
 
         {/* Optimizer & Scheduler */}
         <section>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+          <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
             Optimizer & Scheduler
           </h3>
           <div className="grid grid-cols-2 gap-4">
@@ -231,19 +231,19 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
 
         {/* Data */}
         <section>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+          <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
             Data
           </h3>
           <div className="grid grid-cols-2 gap-4">
             {isManagedExternally ? (
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Training Images
                 </label>
-                <div className="px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md text-sm font-mono text-gray-500 dark:text-gray-400 truncate">
+                <div className="px-3 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-md text-sm font-mono text-slate-500 dark:text-slate-400 truncate">
                   {trainingImagesPath}
                 </div>
-                <p className="text-xs text-gray-400 mt-1">Set in directory picker above</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">Set in directory picker above</p>
               </div>
             ) : (
               renderTextInput('Training Images Path', 'trainingImages', '/path/to/images')
@@ -254,7 +254,7 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
 
         {/* Precision & Sampling */}
         <section>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+          <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
             Precision & Sampling
           </h3>
           <div className="grid grid-cols-2 gap-4">
@@ -265,7 +265,7 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
 
         {/* Optimizations */}
         <section>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+          <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
             Optimizations
           </h3>
           <div className="space-y-2">
@@ -280,7 +280,7 @@ export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
           <button
             type="submit"
             disabled={submitting}
-            className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-6 py-2 bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-md hover:bg-slate-800 dark:hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {submitting ? 'Starting...' : 'Start Training'}
           </button>

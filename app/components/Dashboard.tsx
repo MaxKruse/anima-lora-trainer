@@ -112,24 +112,24 @@ export function Dashboard() {
     []
   );
 
-  const sections: { key: DashboardSection; label: string; icon: string }[] = [
-    { key: 'setup', label: 'Setup', icon: '⚙️' },
-    { key: 'models', label: 'Models', icon: '📦' },
-    { key: 'train', label: 'Train', icon: '🚀' },
-    { key: 'jobs', label: 'Jobs', icon: '📋' },
+  const sections: { key: DashboardSection; label: string }[] = [
+    { key: 'setup', label: 'Setup' },
+    { key: 'models', label: 'Models' },
+    { key: 'train', label: 'Train' },
+    { key: 'jobs', label: 'Jobs' },
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
       {/* Header */}
-      <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-10">
+      <header className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-3">
-              <h1 className="text-xl font-bold text-gray-900 dark:text-white">
+              <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">
                 LoRA Matrix Trainer
               </h1>
-              <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-full">
+              <span className="px-2 py-0.5 text-xs font-medium bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full">
                 Beta
               </span>
             </div>
@@ -142,11 +142,10 @@ export function Dashboard() {
                   onClick={() => setActiveSection(section.key)}
                   className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
                     activeSection === section.key
-                      ? 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white'
-                      : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                      ? 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/50'
                   }`}
                 >
-                  <span className="mr-1.5">{section.icon}</span>
                   {section.label}
                 </button>
               ))}
@@ -164,11 +163,11 @@ export function Dashboard() {
         {activeSection === 'train' && (
           <div className="space-y-8">
             {/* Directory Configuration */}
-            <section className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            <section className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-4">
                 Directories
               </h2>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
                 Configure the input and output directories for training. Paths are saved
                 automatically and persist between sessions.
               </p>
@@ -206,7 +205,7 @@ export function Dashboard() {
                     })
                   }
                   disabled={saving}
-                  className="px-4 py-2 text-sm bg-gray-900 dark:bg-white dark:text-gray-900 text-white rounded-md hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 transition-colors"
+                  className="px-4 py-2 text-sm bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-md hover:bg-slate-800 dark:hover:bg-slate-200 disabled:opacity-50 transition-colors"
                 >
                   {saving ? 'Saving...' : 'Save Directories'}
                 </button>
@@ -214,9 +213,9 @@ export function Dashboard() {
             </section>
 
             {/* Matrix Mode Toggle */}
-            <section className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6">
+            <section className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
                   Training Configuration
                 </h2>
                 <MatrixToggle

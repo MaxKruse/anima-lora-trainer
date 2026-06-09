@@ -16,7 +16,11 @@ export function LoraDownload({ runId, loraFile, exists }: LoraDownloadProps) {
     <a
       href={downloadUrl}
       download={loraFile}
-      className={`lora-download-link ${!exists ? 'disabled' : ''}`}
+      className={`text-sm font-medium transition-colors ${
+        exists
+          ? 'text-slate-900 dark:text-slate-100 hover:underline'
+          : 'text-slate-400 dark:text-slate-500 cursor-not-allowed'
+      }`}
       aria-disabled={!exists}
     >
       {exists ? `Download ${loraFile}` : `${loraFile} (not available)`}

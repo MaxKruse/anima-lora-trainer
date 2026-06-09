@@ -79,50 +79,50 @@ export function ModelDownloader() {
 
   return (
     <div className="max-w-lg mx-auto p-6">
-      <h2 className="text-xl font-bold mb-4">Model Downloads</h2>
+      <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 mb-4">Model Downloads</h2>
 
       {models.length === 0 && (
-        <p className="text-gray-500">Loading model list...</p>
+        <p className="text-slate-500 dark:text-slate-400">Loading model list...</p>
       )}
 
       <div className="space-y-3">
         {models.map((model) => (
           <div
             key={model.name}
-            className="p-4 border rounded-lg bg-white"
+            className="p-4 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800"
           >
             <div className="flex items-center justify-between mb-2">
               <div>
-                <span className="font-medium">{model.name}</span>
-                <span className="text-sm text-gray-500 ml-2">
+                <span className="font-medium text-slate-900 dark:text-slate-100">{model.name}</span>
+                <span className="text-sm text-slate-500 dark:text-slate-400 ml-2">
                   ({formatSize(model.expectedSizeBytes)})
                 </span>
               </div>
 
               {model.status === 'downloaded' && (
-                <span className="text-green-600 text-lg" title="Completed">✓</span>
+                <span className="text-green-600 dark:text-green-400 text-lg font-bold" title="Completed">✓</span>
               )}
 
               {errors[model.name] && (
-                <span className="text-red-600 text-sm">{errors[model.name]}</span>
+                <span className="text-red-600 dark:text-red-400 text-sm">{errors[model.name]}</span>
               )}
             </div>
 
             {model.status === 'downloading' && (
               <div className="mb-2">
                 <div
-                  className="w-full bg-gray-200 rounded-full h-2"
+                  className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2"
                   role="progressbar"
                   aria-valuenow={model.progress}
                   aria-valuemin={0}
                   aria-valuemax={100}
                 >
                   <div
-                    className="bg-blue-600 h-2 rounded-full transition-all"
+                    className="bg-slate-900 dark:bg-slate-300 h-2 rounded-full transition-all"
                     style={{ width: `${model.progress}%` }}
                   />
                 </div>
-                <span className="text-xs text-gray-500">{model.progress}%</span>
+                <span className="text-xs text-slate-500 dark:text-slate-400">{model.progress}%</span>
               </div>
             )}
 
@@ -130,7 +130,7 @@ export function ModelDownloader() {
               <button
                 onClick={() => handleDownload(model.name)}
                 disabled={loading}
-                className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50"
+                className="px-3 py-1 bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white text-sm rounded hover:bg-slate-800 dark:hover:bg-slate-200 disabled:opacity-50 transition-colors"
               >
                 Download
               </button>

@@ -63,15 +63,18 @@ export function ResultsFilters({
   }, [onFilterChange]);
 
   return (
-    <div className="results-filters">
+    <div className="flex flex-wrap items-end gap-3 p-4 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800">
       {/* Sort control */}
-      <div className="filter-group">
-        <label htmlFor="sort-select">Sort by</label>
+      <div className="flex flex-col gap-1">
+        <label htmlFor="sort-select" className="text-xs font-medium text-slate-500 dark:text-slate-400">
+          Sort by
+        </label>
         <select
           id="sort-select"
           role="combobox"
           aria-label="Sort by parameter"
           onChange={(e) => handleSortChange(e.target.value)}
+          className="px-3 py-1.5 text-sm border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500"
         >
           <option value="">None</option>
           {paramNames.map((name) => (
@@ -84,13 +87,16 @@ export function ResultsFilters({
 
       {/* Filter dropdowns for each parameter */}
       {paramNames.map((paramName) => (
-        <div key={paramName} className="filter-group">
-          <label htmlFor={`filter-${paramName}`}>{paramName}</label>
+        <div key={paramName} className="flex flex-col gap-1">
+          <label htmlFor={`filter-${paramName}`} className="text-xs font-medium text-slate-500 dark:text-slate-400">
+            {paramName}
+          </label>
           <select
             id={`filter-${paramName}`}
             role="combobox"
             aria-label={`Filter by ${paramName}`}
             onChange={(e) => handleFilterChange(paramName, e.target.value)}
+            className="px-3 py-1.5 text-sm border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500"
           >
             <option value="">All</option>
             {paramOptions[paramName].map((value) => (
@@ -103,7 +109,10 @@ export function ResultsFilters({
       ))}
 
       {/* Clear button */}
-      <button onClick={handleClear} className="clear-filters-btn">
+      <button
+        onClick={handleClear}
+        className="px-3 py-1.5 text-sm text-slate-600 dark:text-slate-300 border border-slate-300 dark:border-slate-600 rounded-md hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+      >
         Clear filters
       </button>
     </div>
