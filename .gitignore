@@ -51,3 +51,7 @@ next-env.d.ts
 
 # datasets
 /datasets
+
+# training job artifacts
+/jobs
+/output
