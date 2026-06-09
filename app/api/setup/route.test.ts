@@ -20,11 +20,27 @@ vi.mock('child_process', () => ({
 }));
 
 // --- Mock fs ---
+const mockExistsSync = vi.fn();
+const mockStatSync = vi.fn();
+const mockMkdirSync = vi.fn();
+const mockWriteFileSync = vi.fn();
+const mockRmSync = vi.fn();
+const mockUnlinkSync = vi.fn();
 vi.mock('fs', () => ({
   default: {
     readFileSync: vi.fn(),
-    writeFileSync: vi.fn(),
+    writeFileSync: mockWriteFileSync,
+    existsSync: mockExistsSync,
+    statSync: mockStatSync,
+    mkdirSync: mockMkdirSync,
+    rmSync: mockRmSync,
+    unlinkSync: mockUnlinkSync,
   },
+  existsSync: mockExistsSync,
+  statSync: mockStatSync,
+  mkdirSync: mockMkdirSync,
+  rmSync: mockRmSync,
+  unlinkSync: mockUnlinkSync,
 }));
 
 // --- Mock path ---
@@ -37,7 +53,23 @@ vi.mock('path', () => ({
   join: (...args: string[]) => args.join('/'),
 }));
 
+// --- Mock setup-tracker ---
+const mockReadSetupStatus = vi.fn();
+const mockWriteSetupStatus = vi.fn();
+const mockUpdateStep = vi.fn();
+const mockResetSetupStatus = vi.fn();
+const mockCheckReadiness = vi.fn();
+vi.mock('../../lib/setup-tracker', () => ({
+  readSetupStatus: mockReadSetupStatus,
+  writeSetupStatus: mockWriteSetupStatus,
+  updateStep: mockUpdateStep,
+  resetSetupStatus: mockResetSetupStatus,
+  checkReadiness: mockCheckReadiness,
+}));
+
 async function importRoute() {
+  // Clear module cache so mocks take effect
+  vi.resetModules();
   return await import('./route');
 }
 
@@ -64,64 +96,80 @@ function createMockProcess(stdoutData: string, stderrData: string, exitCode: num
 describe('/api/setup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
   });
 
-  it('POST returns gpu info and cuda version when setup succeeds', async () => {
-    // First spawn: nvidia-smi (success with RTX 4090 output)
-    // Second spawn: uv run python setup_env.py (success)
-    mockSpawn
-      .mockReturnValueOnce(
-        createMockProcess(
-          "NVIDIA-SMI 535.00\nGPU Name: NVIDIA GeForce RTX 4090",
-          '',
-          0
-        )
-      )
-      .mockReturnValueOnce(
-        createMockProcess('', '', 0)
-      );
-
-    const route = await importRoute();
-    const response = await route.POST();
-    const body = await response.json();
-
-    expect(body.status).toBe('ok');
-    expect(body).toHaveProperty('gpu');
-    expect(body).toHaveProperty('cuda');
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it('POST returns 500 when nvidia-smi fails', async () => {
-    mockSpawn.mockReturnValueOnce(
-      createMockProcess('', 'nvidia-smi: command not found', 1)
-    );
+  describe('GET', () => {
+    it('returns readiness status from checkReadiness + setup status', async () => {
+      mockCheckReadiness.mockReturnValue({ venvReady: true, sdScriptsReady: true });
+      mockReadSetupStatus.mockReturnValue({
+        status: 'idle',
+        currentStep: null,
+        steps: {},
+        updatedAt: new Date().toISOString(),
+      });
 
-    const route = await importRoute();
-    const response = await route.POST();
+      const route = await importRoute();
+      const response = await route.GET();
+      const body = await response.json();
 
-    expect(response.status).toBe(500);
-    const body = await response.json();
-    expect(body.error).toBeDefined();
+      expect(body.venvReady).toBe(true);
+      expect(body.sdScriptsReady).toBe(true);
+      expect(body.setup).toBeDefined();
+    });
+
+    it('returns venvReady: false when venv does not exist', async () => {
+      mockCheckReadiness.mockReturnValue({ venvReady: false, sdScriptsReady: false });
+      mockReadSetupStatus.mockReturnValue({
+        status: 'idle',
+        currentStep: null,
+        steps: {},
+        updatedAt: new Date().toISOString(),
+      });
+
+      const route = await importRoute();
+      const response = await route.GET();
+      const body = await response.json();
+
+      expect(body.venvReady).toBe(false);
+      expect(body.sdScriptsReady).toBe(false);
+    });
   });
 
-  it('response includes resolved CUDA version string', async () => {
-    mockSpawn
-      .mockReturnValueOnce(
-        createMockProcess(
-          "NVIDIA-SMI 535.00\nGPU Name: NVIDIA GeForce RTX 5090",
-          '',
-          0
-        )
-      )
-      .mockReturnValueOnce(
-        createMockProcess('', '', 0)
-      );
+  describe('POST', () => {
+    it('returns immediately with setup started message', async () => {
+      mockReadSetupStatus.mockReturnValue({
+        status: 'idle',
+        currentStep: null,
+        steps: {},
+        updatedAt: new Date().toISOString(),
+      });
 
-    const route = await importRoute();
-    const response = await route.POST();
-    const body = await response.json();
+      const route = await importRoute();
+      const response = await route.POST();
+      const body = await response.json();
 
-    expect(['cu128', 'cu130']).toContain(body.cuda);
-    expect(body.cuda).toBe('cu130'); // RTX 50 → cu130
+      expect(body.message).toBe('Setup started');
+    });
+
+    it('rejects if setup is already running', async () => {
+      mockReadSetupStatus.mockReturnValue({
+        status: 'running',
+        currentStep: 'uv-sync',
+        steps: {},
+        updatedAt: new Date().toISOString(),
+      });
+
+      const route = await importRoute();
+      const response = await route.POST();
+      const body = await response.json();
+
+      expect(body.message).toBe('Setup already in progress');
+    });
   });
 });
 
@@ -131,56 +179,58 @@ describe('parseGpuInfo', () => {
     return route.parseGpuInfo;
   }
 
-  it('returns cu130 for RTX 50 series', async () => {
+  it('returns cu130 for RTX 50 series from query output', async () => {
     const parseGpuInfo = await getParseGpuInfo();
-    const result = parseGpuInfo("GPU Name: NVIDIA GeForce RTX 5090");
+    // nvidia-smi --query-gpu=name,compute_cap,driver_version --format=csv,noheader
+    const result = parseGpuInfo('NVIDIA GeForce RTX 5090, 12.0, 596.49');
     expect(result).toEqual({
       cuda: 'cu130',
       series: 'blackwell',
       gpuName: 'NVIDIA GeForce RTX 5090',
-      cudaVersion: null,
+      cudaVersion: '596.49',
+      computeCapability: '12.0',
     });
   });
 
-  it('returns cu128 for RTX 40 series', async () => {
+  it('returns cu128 for RTX 40 series from query output', async () => {
     const parseGpuInfo = await getParseGpuInfo();
-    const result = parseGpuInfo("GPU Name: NVIDIA GeForce RTX 4090");
+    const result = parseGpuInfo('NVIDIA GeForce RTX 4090, 8.9, 535.00');
     expect(result).toEqual({
       cuda: 'cu128',
       series: 'ada',
       gpuName: 'NVIDIA GeForce RTX 4090',
-      cudaVersion: null,
+      cudaVersion: '535.00',
+      computeCapability: '8.9',
     });
   });
 
-  it('returns cu128 for RTX 30 series', async () => {
+  it('returns cu128 for RTX 30 series from query output', async () => {
     const parseGpuInfo = await getParseGpuInfo();
-    const result = parseGpuInfo("GPU Name: NVIDIA GeForce RTX 3080");
+    const result = parseGpuInfo('NVIDIA GeForce RTX 3080, 8.6, 535.00');
     expect(result).toEqual({
       cuda: 'cu128',
       series: 'ampere',
       gpuName: 'NVIDIA GeForce RTX 3080',
-      cudaVersion: null,
+      cudaVersion: '535.00',
+      computeCapability: '8.6',
     });
-  });
-
-  it('extracts CUDA toolkit version from output', async () => {
-    const parseGpuInfo = await getParseGpuInfo();
-    const result = parseGpuInfo(
-      "NVIDIA-SMI 535.00\nGPU Name: NVIDIA GeForce RTX 4090\nCUDA Version: 12.8"
-    );
-    expect(result?.cudaVersion).toBe('12.8');
   });
 
   it('returns null for unsupported GPU', async () => {
     const parseGpuInfo = await getParseGpuInfo();
-    const result = parseGpuInfo("GPU Name: NVIDIA GeForce GTX 1080");
+    const result = parseGpuInfo('NVIDIA GeForce GTX 1080, 6.1, 535.00');
     expect(result).toBeNull();
   });
 
   it('returns null for empty input', async () => {
     const parseGpuInfo = await getParseGpuInfo();
     const result = parseGpuInfo('');
+    expect(result).toBeNull();
+  });
+
+  it('returns null for malformed output (single column)', async () => {
+    const parseGpuInfo = await getParseGpuInfo();
+    const result = parseGpuInfo('NVIDIA GeForce RTX 4090');
     expect(result).toBeNull();
   });
 });
