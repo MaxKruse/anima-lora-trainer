@@ -1,24 +1,19 @@
 'use client';
 
-import { useState } from 'react';
-
 interface MatrixToggleProps {
-  onChange?: (mode: 'single' | 'matrix', permutationCount?: number) => void;
+  onChange?: (mode: 'single' | 'matrix') => void;
   permutationCount?: number;
   mode?: 'single' | 'matrix';
 }
 
-export function MatrixToggle({ onChange, permutationCount, mode: initialMode = 'single' }: MatrixToggleProps) {
-  const [mode, setMode] = useState<'single' | 'matrix'>(initialMode);
-
+export function MatrixToggle({ onChange, permutationCount, mode = 'single' }: MatrixToggleProps) {
   function handleToggle() {
     const newMode = mode === 'single' ? 'matrix' : 'single';
-    setMode(newMode);
-    onChange?.(newMode, permutationCount);
+    onChange?.(newMode);
   }
 
   return (
-    <div className="flex items-center gap-4 mb-6">
+    <div className="flex items-center gap-4">
       <span className={`text-sm font-medium ${mode === 'single' ? 'text-slate-900 dark:text-slate-100' : 'text-slate-500 dark:text-slate-400'}`}>
         Single Run
       </span>

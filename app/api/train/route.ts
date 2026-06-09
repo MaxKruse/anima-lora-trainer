@@ -5,113 +5,167 @@ import fs from 'fs';
 import os from 'os';
 import { trainingSchema, type TrainingParams } from '../../lib/training-schema';
 import { createTrainingZip } from '../../lib/training-zip';
+import { getJobStore } from '../../lib/job-store';
 
 const PROJECT_ROOT = path.resolve(process.cwd());
-const JOBS_DIR = path.join(PROJECT_ROOT, 'jobs');
+const CONFIG_DIR = path.join(PROJECT_ROOT, '.config');
+const CONFIG_FILE = path.join(CONFIG_DIR, 'app-config.json');
 
 /**
- * In-memory state to track the currently running job.
+ * In-memory state to track currently running jobs and their child processes.
  */
-let currentJob: { jobId: string; params: TrainingParams } | null = null;
+const activeJobs = new Map<string, { params: TrainingParams; proc: any }>();
 
 /**
- * Reset current job state. Used for testing.
+ * Reset active jobs state. Used for testing.
  */
 export function __resetJobState(): void {
-  currentJob = null;
+  activeJobs.clear();
 }
 
 /**
- * Generate a unique job ID using timestamp + random suffix.
+ * Recover jobs after server restart.
+ * Checks running jobs for alive PIDs and marks dead ones as failed.
  */
-function generateJobId(): string {
-  const timestamp = Date.now();
-  const randomSuffix = Math.random().toString(36).substring(2, 8);
-  return `job-${timestamp}-${randomSuffix}`;
+function recoverJobs(): void {
+  const store = getJobStore();
+  const alivePids = store.recoverJobs();
+
+  // Re-register alive jobs in activeJobs map
+  for (const [jobId, pid] of alivePids) {
+    const job = store.getJob(jobId);
+    if (job) {
+      activeJobs.set(jobId, { params: job.params as TrainingParams, proc: null });
+      console.log(`[train:${jobId}] recovered running job (pid: ${pid})`);
+    }
+  }
 }
 
+// Run recovery on module load
+recoverJobs();
+
 /**
- * Ensure the jobs directory exists.
+ * Load the app config to get user's output directory setting.
  */
-function ensureJobsDir(): void {
-  if (!fs.existsSync(JOBS_DIR)) {
-    fs.mkdirSync(JOBS_DIR, { recursive: true });
+function loadConfig(): { outputDir: string } {
+  try {
+    if (!fs.existsSync(CONFIG_FILE)) {
+      return { outputDir: path.join(PROJECT_ROOT, 'output') };
+    }
+    const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
+    const saved = JSON.parse(raw);
+    return {
+      outputDir: saved.outputDir || path.join(PROJECT_ROOT, 'output'),
+    };
+  } catch {
+    return { outputDir: path.join(PROJECT_ROOT, 'output') };
   }
 }
 
 /**
- * Write a job manifest file.
+ * Read the training progress manifest from output dir.
  */
-function writeJobManifest(jobId: string, data: Record<string, any>): void {
-  ensureJobsDir();
-  const manifestPath = path.join(JOBS_DIR, `${jobId}.json`);
-  fs.writeFileSync(manifestPath, JSON.stringify(data, null, 2));
+function readProgressManifest(outputDir: string): Record<string, any> | null {
+  const manifestPath = path.join(outputDir, 'job_manifest.json');
+  if (!fs.existsSync(manifestPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sync job store status from the output manifest.
+ */
+function syncJobStatus(jobId: string, outputDir: string): void {
+  const manifest = readProgressManifest(outputDir);
+  if (!manifest) return;
+
+  const store = getJobStore();
+  const job = store.getJob(jobId);
+  if (!job) return;
+
+  // Update status from manifest
+  if (manifest.status === 'completed' && job.status === 'running') {
+    store.updateStatus(jobId, 'completed');
+  } else if (manifest.status === 'failed' && job.status === 'running') {
+    store.updateStatus(jobId, 'failed');
+    if (manifest.error) {
+      store.updateError(jobId, manifest.error);
+    }
+  }
 }
 
 /**
  * Launch a training job via uv run scripts/train_single.py.
  */
-async function launchTraining(jobId: string, params: TrainingParams): Promise<void> {
-  const outputDir = path.join(PROJECT_ROOT, 'output', jobId);
+function launchTraining(jobId: string, params: TrainingParams, outputDir: string): Promise<void> {
+  return new Promise((resolve) => {
+    const trainingParams = {
+      ...params,
+      output_dir: outputDir,
+      job_id: jobId,
+    };
 
-  // Create zip of training data (best-effort, don't block training)
-  let zipPath: string | null = null;
-  try {
-    zipPath = await createTrainingZip(params.trainingImages, outputDir);
-  } catch (err: any) {
-    console.warn(`[train:${jobId}] zip creation skipped: ${err.message}`);
-  }
+    // Write params to a temp file to avoid shell escaping issues on Windows
+    const paramsFile = path.join(os.tmpdir(), `train-params-${jobId}.json`);
+    fs.writeFileSync(paramsFile, JSON.stringify(trainingParams), 'utf8');
 
-  const trainingParams = {
-    ...params,
-    output_dir: outputDir,
-  };
+    const cmd = 'uv';
+    const args = [
+      'run',
+      'python',
+      path.join(PROJECT_ROOT, 'scripts', 'train_single.py'),
+      '--params-json-file',
+      paramsFile,
+    ];
 
-  // Write params to a temp file to avoid shell escaping issues on Windows
-  // (cmd.exe mangles JSON with quotes, braces, etc. when shell: true)
-  const paramsFile = path.join(os.tmpdir(), `train-params-${jobId}.json`);
-  fs.writeFileSync(paramsFile, JSON.stringify(trainingParams), 'utf8');
+    const proc = spawn(cmd, args, { shell: true, cwd: PROJECT_ROOT });
 
-  const cmd = 'uv';
-  const args = [
-    'run',
-    'python',
-    path.join(PROJECT_ROOT, 'scripts', 'train_single.py'),
-    '--params-json-file',
-    paramsFile,
-  ];
+    // Store the actual proc reference so cancel can kill it directly
+    activeJobs.set(jobId, { params, proc });
 
-  const proc = spawn(cmd, args, { shell: true, cwd: PROJECT_ROOT });
+    // Also persist PID to disk for recovery after server restart
+    if (proc.pid) {
+      getJobStore().updatePid(jobId, proc.pid);
+    }
 
-  // Write initial job manifest
-  writeJobManifest(jobId, {
-    jobId,
-    status: 'running',
-    params: trainingParams,
-    outputDir,
-    zipPath: zipPath || undefined,
-    startedAt: new Date().toISOString(),
-    pid: proc.pid,
-  });
-
-  // Capture output for debugging
-  proc.stdout.on('data', (data: Buffer) => {
-    console.log(`[train:${jobId}] stdout: ${data.toString().trim()}`);
-  });
-
-  proc.stderr.on('data', (data: Buffer) => {
-    console.error(`[train:${jobId}] stderr: ${data.toString().trim()}`);
-  });
-
-  proc.on('close', (code) => {
-    const finalStatus = code === 0 ? 'completed' : 'failed';
-    writeJobManifest(jobId, {
-      jobId,
-      status: finalStatus,
-      exitCode: code,
-      completedAt: new Date().toISOString(),
+    // Capture output for debugging
+    proc.stdout.on('data', (data: Buffer) => {
+      console.log(`[train:${jobId}] stdout: ${data.toString().trim()}`);
     });
-    currentJob = null;
+
+    proc.stderr.on('data', (data: Buffer) => {
+      console.error(`[train:${jobId}] stderr: ${data.toString().trim()}`);
+    });
+
+    proc.on('close', (code) => {
+      syncJobStatus(jobId, outputDir);
+
+      // Clean up temp params file
+      try {
+        if (fs.existsSync(paramsFile)) {
+          fs.unlinkSync(paramsFile);
+        }
+      } catch {
+        // Ignore cleanup errors
+      }
+
+      activeJobs.delete(jobId);
+      console.log(`[train:${jobId}] process exited with code ${code}`);
+      resolve();
+    });
+
+    // Poll the output manifest to sync job status while running
+    const pollInterval = setInterval(() => {
+      syncJobStatus(jobId, outputDir);
+    }, 5000);
+
+    // Stop polling when process exits
+    proc.on('exit', () => {
+      clearInterval(pollInterval);
+    });
   });
 }
 
@@ -125,12 +179,14 @@ async function launchTraining(jobId: string, params: TrainingParams): Promise<vo
  */
 export async function POST(request: Request) {
   try {
-    // Check if another job is running
-    if (currentJob) {
+    // Check if a job is already running
+    if (activeJobs.size > 0) {
+      const [currentJobId] = activeJobs.keys();
       return NextResponse.json(
         {
           error: 'A training job is already running',
-          currentJobId: currentJob.jobId,
+          currentJobId,
+          hint: 'Wait for the current job to complete, or use Matrix mode to train multiple configurations at once.',
         },
         { status: 409 }
       );
@@ -156,21 +212,65 @@ export async function POST(request: Request) {
     }
 
     const params = result.data;
-    const jobId = generateJobId();
 
-    // Track the job in memory
-    currentJob = { jobId, params };
+    // Load config to get user's output directory
+    const config = loadConfig();
+    const userOutputDir = config.outputDir;
+
+    // Create job in store (gets its own ID)
+    const store = getJobStore();
+    const jobId = store.createJob(params);
+
+    // Build output directory: <userOutputDir>/<jobId>/
+    const jobOutputDir = path.join(userOutputDir, jobId);
+
+    // Check if a folder with the same loraName already exists in the user's output dir
+    if (fs.existsSync(userOutputDir)) {
+      const existing = fs.readdirSync(userOutputDir);
+      if (existing.includes(params.loraName)) {
+        store.deleteJob(jobId);
+        return NextResponse.json(
+          {
+            error: `A training with name "${params.loraName}" already exists in the output folder. Please choose a different name.`,
+          },
+          { status: 409 }
+        );
+      }
+    }
+
+    // Update job record with the actual output directory
+    const job = store.getJob(jobId);
+    if (job) {
+      job.params.outputDir = jobOutputDir;
+    }
+    store.updateStatus(jobId, 'running');
+
+    // Create output directory
+    fs.mkdirSync(jobOutputDir, { recursive: true });
+
+    // Create zip of training data (best-effort, don't block training)
+    try {
+      await createTrainingZip(params.trainingImages, jobOutputDir);
+    } catch (err: any) {
+      console.warn(`[train:${jobId}] zip creation skipped: ${err.message}`);
+    }
+
+    // Track the active job (proc reference updated inside launchTraining)
+    activeJobs.set(jobId, { params, proc: null });
 
     // Launch training asynchronously
-    launchTraining(jobId, params).catch((err) => {
+    launchTraining(jobId, params, jobOutputDir).catch((err) => {
       console.error(`[train:${jobId}] launch error:`, err);
-      currentJob = null;
+      store.updateStatus(jobId, 'failed');
+      store.updateError(jobId, err.message || 'Unknown launch error');
+      activeJobs.delete(jobId);
     });
 
     return NextResponse.json({
       jobId,
       status: 'started',
       message: `Training job ${jobId} has been started`,
+      outputDir: jobOutputDir,
     });
   } catch (error: any) {
     return NextResponse.json(
@@ -180,4 +280,36 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   }
+}
+
+/**
+ * POST /api/train/[jobId]/cancel
+ * Handles cancellation via a separate route (see api/jobs/[jobId]/cancel).
+ * This function is exported for internal use.
+ */
+export function cancelJob(jobId: string): boolean {
+  const activeJob = activeJobs.get(jobId);
+  if (!activeJob) {
+    return false;
+  }
+
+  // Write cancel signal file for Python script
+  const cancelPath = path.join(PROJECT_ROOT, 'jobs', `${jobId}.cancel`);
+  fs.writeFileSync(cancelPath, new Date().toISOString());
+
+  // Kill the child process if we have a reference
+  if (activeJob.proc) {
+    try {
+      activeJob.proc.kill('SIGTERM');
+    } catch {
+      // Ignore kill errors
+    }
+  }
+
+  const store = getJobStore();
+  store.updateStatus(jobId, 'failed');
+  store.updateError(jobId, 'Cancelled by user');
+  activeJobs.delete(jobId);
+
+  return true;
 }

@@ -64,22 +64,15 @@ function CircularProgress({ progress, canAbort, onAbort }: {
       <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-slate-500 dark:text-slate-400">
         {progress}%
       </span>
-      {/* Abort button overlay — visible on hover when abortable */}
+      {/* Abort button — always visible when abortable, positioned top-right */}
       {canAbort && (
         <button
           onClick={onAbort}
-          className="absolute inset-0 w-full h-full flex items-center justify-center bg-red-500 rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+          className="absolute -top-1 -right-1 w-5 h-5 flex items-center justify-center bg-red-500 rounded-full text-white text-xs hover:bg-red-600 transition-colors cursor-pointer z-10 shadow-sm"
           title="Abort download"
           aria-label="Abort download"
         >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 16 16"
-            fill="none"
-          >
-            <rect x="2" y="2" width="12" height="12" fill="white" rx="1" />
-          </svg>
+          ✕
         </button>
       )}
     </div>

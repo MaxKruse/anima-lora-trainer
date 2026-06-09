@@ -10,6 +10,7 @@ export interface JobRecord {
   createdAt: string;
   updatedAt?: string;
   error?: string;
+  pid?: number;
 }
 
 /**
@@ -80,6 +81,51 @@ export class JobStore {
     job.updatedAt = new Date().toISOString();
     this.persistJob(job);
     return true;
+  }
+
+  /**
+   * Update a job's PID.
+   */
+  updatePid(id: string, pid: number): boolean {
+    const job = this.jobs.get(id);
+    if (!job) return false;
+
+    job.pid = pid;
+    this.persistJob(job);
+    return true;
+  }
+
+  /**
+   * Check if a process is alive by PID.
+   */
+  static isProcessAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0); // Sends no signal, just checks existence
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Recover jobs after server restart.
+   * Marks dead processes as failed, returns PIDs of still-running processes.
+   */
+  recoverJobs(): Map<string, number> {
+    const alivePids = new Map<string, number>();
+
+    for (const job of this.listJobs()) {
+      if (job.status === 'running' && job.pid) {
+        if (JobStore.isProcessAlive(job.pid)) {
+          alivePids.set(job.id, job.pid);
+        } else {
+          this.updateStatus(job.id, 'failed');
+          this.updateError(job.id, 'Process died (server restart or crash)');
+        }
+      }
+    }
+
+    return alivePids;
   }
 
   /**

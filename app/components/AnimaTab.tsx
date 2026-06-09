@@ -1,11 +1,20 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { trainingSchema, type TrainingParams } from '../lib/training-schema';
 import { MultiSelectDropdown } from './MultiSelectDropdown';
 
 interface AnimaTabProps {
   onSubmit: (params: TrainingParams) => void;
+  /**
+   * Called in matrix mode with paramRanges and baseParams.
+   * If not provided, the component POSTs to /api/train/matrix directly.
+   */
+  onMatrixSubmit?: (paramRanges: Record<string, string>, baseParams: Record<string, any>) => void;
+  /**
+   * Called when the permutation count changes in matrix mode.
+   */
+  onPermutationCountChange?: (count: number) => void;
   /**
    * When provided, the training images path is pre-filled and the field
    * is hidden (managed by the parent directory picker).
@@ -43,7 +52,8 @@ const DEFAULT_PARAMS: Omit<TrainingParams, 'trainingImages' | 'loraName'> = {
   timestepSampling: 'sigmoid',
   gradientCheckpointing: true,
   cacheLatents: true,
-  cacheTextEncoder: true,
+  cacheTextEncoder: false,
+  captionTagDropoutRate: 0.05,
 };
 
 // Default matrix values (single value arrays for initial state)
@@ -60,7 +70,7 @@ const DEFAULT_MATRIX_VALUES: Record<string, string[]> = {
   timestepSampling: ['sigmoid'],
 };
 
-export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: AnimaTabProps) {
+export function AnimaTab({ onSubmit, onMatrixSubmit, onPermutationCountChange, trainingImagesPath, matrixMode = false }: AnimaTabProps) {
   const isManagedExternally = trainingImagesPath !== undefined;
   const [params, setParams] = useState({
     ...DEFAULT_PARAMS,
@@ -71,12 +81,53 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
   const [matrixValues, setMatrixValues] = useState<Record<string, string[]>>(DEFAULT_MATRIX_VALUES);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  const [nameAvailable, setNameAvailable] = useState<boolean | null>(null);
+  const [nameChecking, setNameChecking] = useState(false);
+
+  // Calculate permutation count for matrix mode
+  const permutationCount = useMemo(() => {
+    if (!matrixMode) return 0;
+    return Object.values(matrixValues).reduce((total, values) => {
+      return values.length > 0 ? total * values.length : 0;
+    }, 1);
+  }, [matrixMode, matrixValues]);
+
+  // Report permutation count to parent
+  useEffect(() => {
+    onPermutationCountChange?.(permutationCount);
+  }, [permutationCount, onPermutationCountChange]);
 
   // Show required-field errors immediately on mount
   useEffect(() => {
     validate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Check name availability when loraName changes
+  useEffect(() => {
+    if (!params.loraName || params.loraName.length < 2) {
+      setNameAvailable(null);
+      return;
+    }
+
+    setNameChecking(true);
+    let cancelled = false;
+    fetch(`/api/check-name?name=${encodeURIComponent(params.loraName)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled) {
+          setNameAvailable(data.available);
+          setNameChecking(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setNameAvailable(null);
+          setNameChecking(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [params.loraName]);
 
   function updateParam<K extends keyof typeof params>(key: K, value: (typeof params)[K]) {
     setParams((prev) => ({ ...prev, [key]: value }));
@@ -139,6 +190,96 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
   async function handleSubmit() {
     if (!validate()) return;
 
+    // Block submit if name is taken
+    if (nameAvailable === false) {
+      setErrors((prev) => ({ ...prev, loraName: 'Name already exists — choose a different one' }));
+      return;
+    }
+
+    // Matrix mode: build matrix payload and submit directly
+    if (matrixMode) {
+      // Block excessive permutations
+      const MAX_PERMS = 500;
+      if (permutationCount > MAX_PERMS) {
+        setErrors(prev => ({ ...prev, _submit: `Too many permutations (${permutationCount}). Maximum is ${MAX_PERMS}.` }));
+        return;
+      }
+
+      // Show confirmation
+      const estimatedHours = Math.round(permutationCount * 15 / 60 * 10) / 10;
+      const message = `Start matrix training "${params.loraName}"?
+
+${permutationCount} training permutations
+Estimated time: ~${estimatedHours} hours
+This will use your GPU exclusively.`;
+
+      if (!confirm(message)) return;
+
+      setSubmitting(true);
+      try {
+        // Build paramRanges from matrixValues
+        const paramRanges: Record<string, string> = {};
+        for (const [key, values] of Object.entries(matrixValues)) {
+          if (values.length > 0) {
+            paramRanges[key] = values.join(',');
+          }
+        }
+
+        // Build baseParams from non-matrix fields
+        const baseParams = {
+          trainingImages: isManagedExternally ? trainingImagesPath : params.trainingImages,
+          loraName: params.loraName,
+          mixedPrecision: params.mixedPrecision,
+          timestepSampling: params.timestepSampling,
+          gradientCheckpointing: params.gradientCheckpointing,
+          cacheLatents: params.cacheLatents,
+          cacheTextEncoder: params.cacheTextEncoder,
+          captionTagDropoutRate: params.captionTagDropoutRate,
+        };
+
+        if (onMatrixSubmit) {
+          onMatrixSubmit(paramRanges, baseParams);
+        } else {
+          const res = await fetch('/api/train/matrix', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paramRanges, baseParams }),
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            setErrors(prev => ({ ...prev, _submit: data.error || 'Matrix training failed' }));
+          }
+        }
+      } catch (err: any) {
+        setErrors(prev => ({ ...prev, _submit: err.message || 'Network error' }));
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    // Single mode: show confirmation before starting
+    const minutesPerEpoch = 15;
+    const totalMinutes = params.epochs * minutesPerEpoch;
+    const estimatedTime = totalMinutes < 60
+      ? `~${totalMinutes} minutes`
+      : `~${Math.round(totalMinutes / 60)} hours ${totalMinutes % 60} minutes`;
+
+    const message = `Start training "${params.loraName}"?
+
+Parameters:
+  Dim: ${params.networkDim}  Alpha: ${params.networkAlpha}
+  LR: ${params.learningRate}  Batch: ${params.batchSize}
+  Epochs: ${params.epochs}  Resolution: ${params.resolution}px
+  Optimizer: ${params.optimizer}  Scheduler: ${params.scheduler}
+
+Estimated time: ${estimatedTime}
+This will use your GPU exclusively.`;
+
+    if (!confirm(message)) return;
+
     setSubmitting(true);
     try {
       const finalParams = isManagedExternally
@@ -163,7 +304,7 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
   }
 
   // Single-mode renderers
-  function renderNumberInput(label: string, key: keyof typeof params, min: number, step = 1) {
+  function renderNumberInput(label: string, key: keyof typeof params, min: number, step = 1, max?: number) {
     return (
       <div key={key}>
         <label htmlFor={key} className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
@@ -173,9 +314,10 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
           id={key}
           type="number"
           min={min}
+          max={max}
           step={step}
           value={params[key] as number}
-          onChange={(e) => updateParam(key, parseFloat(e.target.value) || 0)}
+          onChange={(e) => updateParam(key, parseFloat(e.target.value.replace(',', '.')) || 0)}
           className={`w-full px-3 py-2 border rounded-md text-sm bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 ${
             errors[key] ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
           } focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500`}
@@ -199,7 +341,7 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
           value={value ?? ''}
           placeholder={placeholder}
           onChange={(e) => {
-            const raw = e.target.value;
+            const raw = e.target.value.replace(',', '.');
             (params as Record<string, any>)[key] = raw === '' ? undefined : parseInt(raw, 10);
             setParams({ ...params });
             if (errors[key]) {
@@ -376,10 +518,20 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
               Data
             </h3>
             <div className="space-y-3">
-              {renderTextInput('LoRA Name', 'loraName', 'my-lora', true)}
+              <div>
+                {renderTextInput('LoRA Name', 'loraName', 'my-lora', true)}
+                {!nameChecking && params.loraName.length >= 2 && nameAvailable !== null && (
+                  <p className={`text-xs mt-1 ${nameAvailable ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                    {nameAvailable ? '✓ Name is available' : '✗ Name already exists — choose a different one'}
+                  </p>
+                )}
+                {nameChecking && (
+                  <p className="text-xs mt-1 text-slate-400 dark:text-slate-500">Checking...</p>
+                )}
+              </div>
               {matrixMode
                 ? renderMultiSelect('Resolution', 'resolution', DEFAULT_RESOLUTIONS)
-                : renderNumberInput('Resolution', 'resolution', 256)}
+                : renderNumberInput('Resolution', 'resolution', 768, 16, 1024)}
             </div>
           </section>
 
@@ -406,6 +558,34 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
           {/* Optimizations */}
           <section>
             <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
+              Caption
+            </h3>
+            <div className="space-y-2">
+              <div>
+                <label htmlFor="captionTagDropoutRate" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Caption Tag Dropout Rate
+                </label>
+                <input
+                  id="captionTagDropoutRate"
+                  type="text"
+                  inputMode="decimal"
+                  value={params.captionTagDropoutRate}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(',', '.');
+                    const val = parseFloat(raw);
+                    updateParam('captionTagDropoutRate', isNaN(val) ? 0 : Math.min(1, Math.max(0, val)));
+                  }}
+                  className={`w-full px-3 py-2 border rounded-md text-sm bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 ${
+                    errors.captionTagDropoutRate ? 'border-red-500' : 'border-slate-300 dark:border-slate-600'
+                  } focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500`}
+                />
+                {errors.captionTagDropoutRate && <p className="text-red-500 dark:text-red-400 text-xs mt-1">{errors.captionTagDropoutRate}</p>}
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">
               Optimizations
             </h3>
             <div className="space-y-2">
@@ -416,14 +596,41 @@ export function AnimaTab({ onSubmit, trainingImagesPath, matrixMode = false }: A
           </section>
         </div>
 
+        {/* Permutation count warning (matrix mode) */}
+        {matrixMode && permutationCount > 0 && (
+          <div className={`mt-6 p-3 rounded-lg ${
+            permutationCount > 100
+              ? 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'
+              : permutationCount > 20
+                ? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800'
+                : 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800'
+          }`}>
+            <p className="text-sm font-medium">
+              {permutationCount} training permutations
+            </p>
+            {permutationCount > 100 && (
+              <p className="text-xs text-red-600 dark:text-red-400 mt-1">
+                Warning: This will create {permutationCount} separate training jobs.
+                Estimated time: {Math.round(permutationCount * 15 / 60)} hours.
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Submit */}
         <div className="pt-6">
+          {errors._submit && (
+            <p className="text-red-600 dark:text-red-400 text-sm mb-3">{errors._submit}</p>
+          )}
           <button
             type="submit"
             disabled={submitting}
             className="w-full px-6 py-2 bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-md hover:bg-slate-800 dark:hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {submitting ? 'Starting...' : 'Start Training'}
+            {submitting
+              ? matrixMode ? 'Starting Matrix Training...' : 'Starting...'
+              : matrixMode ? `Start Matrix Training (${permutationCount})`
+              : 'Start Training'}
           </button>
         </div>
       </form>

@@ -7,6 +7,7 @@ import { MatrixToggle } from './MatrixToggle';
 import { JobList } from './JobList';
 import { SetupWizard } from './SetupWizard';
 import { ModelDownloader } from './ModelDownloader';
+import { ResultsDashboard } from './ResultsDashboard';
 import { type TrainingParams } from '../lib/training-schema';
 
 interface AppConfig {
@@ -22,7 +23,7 @@ interface DatasetDir {
   path: string;
 }
 
-type DashboardSection = 'setup' | 'models' | 'train' | 'jobs';
+type DashboardSection = 'setup' | 'models' | 'train' | 'jobs' | 'results';
 
 interface SetupReadiness {
   venvReady: boolean;
@@ -53,6 +54,7 @@ export function Dashboard() {
   );
   const [trainingResponse, setTrainingResponse] = useState<string | null>(null);
   const [matrixMode, setMatrixMode] = useState<'single' | 'matrix'>('single');
+  const [permutationCount, setPermutationCount] = useState(0);
 
   // Setup readiness gate
   const [setupReadiness, setSetupReadiness] = useState<SetupReadiness | null>(null);
@@ -191,6 +193,7 @@ export function Dashboard() {
   const handleMatrixModeChange = useCallback(
     (mode: 'single' | 'matrix') => {
       setMatrixMode(mode);
+      setPermutationCount(0);
     },
     []
   );
@@ -222,11 +225,39 @@ export function Dashboard() {
     []
   );
 
+  const handleMatrixTrainingSubmit = useCallback(
+    async (paramRanges: Record<string, string>, baseParams: Record<string, any>) => {
+      setTrainingResponse(null);
+
+      try {
+        const res = await fetch('/api/train/matrix', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paramRanges, baseParams }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          setTrainingResponse(`Error: ${data.error || 'Matrix training failed to start'}`);
+          return;
+        }
+
+        setTrainingResponse(`Matrix job ${data.jobId} started with ${data.permutationCount} permutations!`);
+        setActiveSection('jobs');
+      } catch (err: any) {
+        setTrainingResponse(`Error: ${err.message || 'Network error'}`);
+      }
+    },
+    []
+  );
+
   const sections: { key: DashboardSection; label: string }[] = [
     { key: 'setup', label: 'Setup' },
     { key: 'models', label: 'Models' },
     { key: 'train', label: 'Train' },
     { key: 'jobs', label: 'Jobs' },
+    { key: 'results', label: 'Results' },
   ];
 
   return (
@@ -413,12 +444,15 @@ export function Dashboard() {
                 <MatrixToggle
                   mode={matrixMode}
                   onChange={handleMatrixModeChange}
+                  permutationCount={permutationCount}
                 />
               </div>
 
               <TrainTabs
                 trainingImagesPath={config.trainingImagesDir}
                 onSubmit={handleTrainingSubmit}
+                onMatrixSubmit={handleMatrixTrainingSubmit}
+                onPermutationCountChange={setPermutationCount}
                 matrixMode={matrixMode === 'matrix'}
               />
 
@@ -438,6 +472,8 @@ export function Dashboard() {
         )}
 
         {activeSection === 'jobs' && <JobList />}
+
+        {activeSection === 'results' && <ResultsDashboard />}
       </main>
     </div>
   );

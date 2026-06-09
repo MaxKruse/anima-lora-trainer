@@ -226,7 +226,7 @@ function runPythonDownload(
     const scriptFile = path.join(tmpDir, 'download.py');
     fs.writeFileSync(scriptFile, DOWNLOAD_SCRIPT, 'utf-8');
 
-    const proc = spawn('python', [scriptFile, url, dest], {
+    const proc = spawn('uv', ['run', 'python', scriptFile, url, dest], {
       shell: false,
       env: spawnEnv,
     });

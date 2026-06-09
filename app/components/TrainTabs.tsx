@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { type TrainingParams } from '../lib/training-schema';
 import { AnimaTab } from './AnimaTab';
 
@@ -8,6 +8,8 @@ export type ModelType = 'anima' | 'flux' | 'sd3' | 'sdxl' | 'sd15' | 'hunyuan' |
 
 interface TrainTabsProps {
   onSubmit: (params: TrainingParams) => void;
+  onMatrixSubmit?: (paramRanges: Record<string, string>, baseParams: Record<string, any>) => void;
+  onPermutationCountChange?: (count: number) => void;
   trainingImagesPath?: string;
   matrixMode?: boolean;
 }
@@ -39,11 +41,11 @@ function ComingSoonTab({ modelLabel }: { modelLabel: string }) {
   );
 }
 
-export function TrainTabs({ onSubmit, trainingImagesPath, matrixMode = false }: TrainTabsProps) {
+export function TrainTabs({ onSubmit, onMatrixSubmit, onPermutationCountChange, trainingImagesPath, matrixMode = false }: TrainTabsProps) {
   const [activeTab, setActiveTab] = useState<ModelType>('anima');
 
   return (
-    <div className="max-w-screen-xl mx-auto px-16 py-8">
+    <div className="max-w-screen-xl mx-auto">
       {/* Model type tabs */}
       <div className="mb-6 border-b border-slate-200 dark:border-slate-700">
         <nav className="flex gap-1 -mb-px overflow-x-auto" aria-label="Model types">
@@ -68,6 +70,8 @@ export function TrainTabs({ onSubmit, trainingImagesPath, matrixMode = false }: 
         {IMPLEMENTED_MODELS.includes(activeTab) ? (
           <AnimaTab
             onSubmit={onSubmit}
+            onMatrixSubmit={onMatrixSubmit}
+            onPermutationCountChange={onPermutationCountChange}
             trainingImagesPath={trainingImagesPath}
             matrixMode={matrixMode}
           />

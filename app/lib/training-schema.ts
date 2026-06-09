@@ -21,7 +21,7 @@ export const trainingSchema = z.object({
   // Data
   trainingImages: z.string().min(1),
   loraName: z.string().min(1),
-  resolution: z.number().int().min(256).default(1024),
+  resolution: z.number().int().min(768).max(1024).default(1024),
 
   // Precision
   mixedPrecision: z.enum(['fp16', 'bf16', 'no']),
@@ -32,7 +32,10 @@ export const trainingSchema = z.object({
   // Optimizations
   gradientCheckpointing: z.boolean().default(true),
   cacheLatents: z.boolean().default(true),
-  cacheTextEncoder: z.boolean().default(true),
+  cacheTextEncoder: z.boolean().default(false),
+
+  // Caption
+  captionTagDropoutRate: z.number().min(0).max(1).default(0.05),
 });
 
 export type TrainingParams = z.infer<typeof trainingSchema>;

@@ -12,6 +12,8 @@ def generate_dataset_toml(
     num_repeats: int,
     output_path: str,
     resolution: int = 1024,
+    cache_text_encoder_outputs: bool = False,
+    caption_tag_dropout_rate: float = 0.05,
 ) -> str:
     """Generate a .toml dataset config for training.
 
@@ -26,6 +28,11 @@ def generate_dataset_toml(
         num_repeats: How many times each image is repeated per epoch.
         output_path: Path to write the TOML file.
         resolution: Image resolution (default: 1024).
+        cache_text_encoder_outputs: If True, disable shuffle_caption,
+            token_warmup_step, and caption_tag_dropout_rate (required by
+            kohya-ss when --cache_text_encoder_outputs is used).
+        caption_tag_dropout_rate: Probability of dropping each caption tag
+            (default: 0.05). Overridden to 0.0 when caching is enabled.
 
     Returns:
         Path to the generated TOML file.
@@ -36,12 +43,31 @@ def generate_dataset_toml(
     bucket_steps = 16  # Anima: WanVAE spatial downscale=8, patch_size=2 -> 16
 
     clamped = max(min_reso, min(resolution, max_reso))
+    if resolution != clamped:
+        import logging
+        logging.warning(
+            f"Resolution {resolution} clamped to {clamped} "
+            f"(Anima supports {min_reso}-{max_reso}px)"
+        )
+
+    # When caching text encoder outputs, certain caption randomization
+    # options are incompatible (kohya-ss AssertionError)
+    if cache_text_encoder_outputs:
+        shuffle_caption = False
+        token_warmup_step = 0
+        effective_dropout = 0.0
+    else:
+        shuffle_caption = True
+        token_warmup_step = 0
+        effective_dropout = caption_tag_dropout_rate
 
     config = {
         "general": {
-            "shuffle_caption": True,
+            "shuffle_caption": shuffle_caption,
             "caption_extension": ".txt",
             "keep_tokens": 1,
+            "token_warmup_step": token_warmup_step,
+            "caption_tag_dropout_rate": effective_dropout,
         },
         "datasets": [
             {
