@@ -48,3 +48,6 @@ next-env.d.ts
 
 # downloaded model files
 /models
+
+# datasets
+/datasets

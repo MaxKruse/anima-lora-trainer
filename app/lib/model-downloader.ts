@@ -125,8 +125,7 @@ export function checkLocalModel(entry: ModelEntry & { expectedSizeBytes?: number
       ? Math.round((stat.size / expectedSize) * 100)
       : 0;
     
-    console.log(`[status]   Local: ${localPath}`);
-    console.log(`[status]   size=${stat.size} bytes, expected=${expectedSize} bytes, percent=${Math.min(percent, 100)}%`);
+
     
     return {
       exists: true,
@@ -136,7 +135,7 @@ export function checkLocalModel(entry: ModelEntry & { expectedSizeBytes?: number
     };
   }
   
-  console.log(`[status]   NOT found locally`);
+
   return { exists: false };
 }
 
@@ -152,18 +151,13 @@ export async function downloadModel(
   const url = buildHfDownloadUrl(hfRepo, hfFile);
   const localPath = getLocalPath(entry);
 
-  console.log(`[download] === downloadModel START: ${entry.name} ===`);
-  console.log(`[download]   url=${url}`);
-  console.log(`[download]   dest=${localPath}`);
+  console.log(`[download] Starting: ${entry.name}`);
 
   // Ensure models directory exists
   fs.mkdirSync(MODELS_DIR, { recursive: true });
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    console.log(`[download] Attempt ${attempt}/${MAX_RETRIES} for ${entry.name}`);
-
     if (abortSignal?.aborted) {
-      console.log(`[download] Aborted before attempt ${attempt}: ${entry.name}`);
       throw new Error(`Download aborted: ${entry.name}`);
     }
 
@@ -174,17 +168,13 @@ export async function downloadModel(
     });
 
     try {
-      console.log(`[download] Spawning Python HTTP download for ${entry.name}`);
-
       const downloadedPath = await runPythonDownload(url, localPath, abortSignal, (progress) => {
         onProgress?.({ ...progress, model: entry.name });
       });
 
-      console.log(`[download] Python download completed for ${entry.name}`);
-
       if (downloadedPath && fs.existsSync(downloadedPath)) {
         const stat = fs.statSync(downloadedPath);
-        console.log(`[download] Downloaded file: ${downloadedPath}, size=${stat.size} bytes`);
+        console.log(`[download] Complete: ${entry.name} (${(stat.size / 1024 / 1024).toFixed(0)}MB)`);
       } else {
         console.error(`[download] WARNING: download succeeded but file not found at ${downloadedPath}!`);
       }
@@ -196,14 +186,12 @@ export async function downloadModel(
         message: `Downloaded ${entry.name} successfully`,
       });
 
-      console.log(`[download] === downloadModel SUCCESS: ${entry.name} ===`);
       return;
     } catch (error: any) {
       const errorMsg = error.message || 'Unknown error';
-      console.error(`[download] Attempt ${attempt} FAILED for ${entry.name}: ${errorMsg}`);
 
       if (attempt === MAX_RETRIES) {
-        console.error(`[download] All ${MAX_RETRIES} attempts exhausted for ${entry.name}`);
+        console.error(`[download] Failed: ${entry.name} — ${errorMsg}`);
         onProgress?.({
           model: entry.name,
           status: 'failed',
@@ -228,8 +216,6 @@ function runPythonDownload(
   onProgress?: (progress: DownloadProgress) => void
 ): Promise<string | null> {
   return new Promise((resolve, reject) => {
-    console.log(`[py:spawn] Spawning: python <script> ${url} ${dest}`);
-
     const spawnEnv = {
       ...process.env,
       PYTHONIOENCODING: 'utf-8',
@@ -244,8 +230,6 @@ function runPythonDownload(
       shell: false,
       env: spawnEnv,
     });
-
-    console.log(`[py:spawn] Process spawned, pid=${proc.pid}`);
 
     let stderr = '';
     let lastReportedPct = -1;
@@ -280,8 +264,6 @@ function runPythonDownload(
               lastReportedBytes = downloaded!;
             }
             if (pctChanged || bytesChanged) {
-              const mb = downloaded != null ? (downloaded / 1024 / 1024).toFixed(1) : 'n/a';
-              console.log(`[py:progress] ${pct}% (${mb}MB)`);
               onProgress?.({
                 model: '',
                 status: 'downloading',
@@ -290,14 +272,10 @@ function runPythonDownload(
               });
             }
           } else if (msg.type === 'done') {
-            console.log(`[py:done] File saved to: ${msg.path}`);
             downloadedPath = msg.path || null;
           } else if (msg.type === 'error') {
-            console.error(`[py:error] ${msg.message}`);
             reject(new Error(msg.message));
             return;
-          } else if (msg.type === 'start') {
-            console.log(`[py:start] Total size: ${msg.total} bytes`);
           }
         } catch {
           // Not a JSON line, ignore
@@ -306,35 +284,27 @@ function runPythonDownload(
     });
 
     proc.stderr.on('data', (data) => {
-      const msg = data.toString().trim();
-      if (msg) console.log(`[py:stderr] ${msg}`);
       stderr += data.toString();
     });
 
     proc.on('close', (code) => {
-      console.log(`[py:close] Process exited with code=${code}`);
-
       if (code === 0) {
-        console.log(`[py:close] Success — resolving`);
         try { fs.unlinkSync(scriptFile); fs.rmdirSync(tmpDir); } catch { /* ignore */ }
         resolve(downloadedPath);
       } else {
         const errMsg = stderr || `Python download exited with code ${code}`;
-        console.error(`[py:close] FAILURE — ${errMsg.slice(0, 300)}`);
         try { fs.unlinkSync(scriptFile); fs.rmdirSync(tmpDir); } catch { /* ignore */ }
         reject(new Error(errMsg));
       }
     });
 
     proc.on('error', (err) => {
-      console.error(`[py:error] Spawn error: ${err.message || err}`);
       try { fs.unlinkSync(scriptFile); fs.rmdirSync(tmpDir); } catch { /* ignore */ }
       reject(err);
     });
 
     if (signal) {
       signal.addEventListener('abort', () => {
-        console.log(`[py:abort] Aborting Python process pid=${proc.pid}`);
         proc.kill();
         try { fs.unlinkSync(scriptFile); fs.rmdirSync(tmpDir); } catch { /* ignore */ }
         reject(new Error('Download aborted'));

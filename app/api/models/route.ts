@@ -19,9 +19,7 @@ const activeDownloads = new Map<string, ActiveDownload>();
  */
 export async function GET() {
   try {
-    console.log('[models:GET] Fetching model status for all models');
     const manifest = await getResolvedModelManifest('anima');
-    console.log(`[models:GET] Manifest has ${manifest.length} models`);
 
     const models = await Promise.all(
       manifest.map(async (entry) => {
@@ -45,8 +43,6 @@ export async function GET() {
         // Use in-memory progress from the onProgress callback when available,
         // otherwise fall back to file-size-based progress from local file
         const progress = isActive ? active.progress : (status.downloadPercent || 0);
-
-        console.log(`[models:GET] ${entry.name}: status=${modelStatus}, progress=${progress}%, exists=${status.exists}, sizeBytes=${status.sizeBytes}, expectedSizeBytes=${entry.expectedSizeBytes}, isActive=${isActive}, activeError=${active?.error ?? 'none'}`);
 
         return {
           name: entry.name,
@@ -84,10 +80,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { modelName } = body as { modelName?: string };
 
-    console.log(`[models:POST] Received download request, modelName=${modelName}`);
-
     if (!modelName) {
-      console.log('[models:POST] Rejected: modelName is missing');
       return NextResponse.json(
         { error: 'modelName is required' },
         { status: 400 }
@@ -98,21 +91,16 @@ export async function POST(request: Request) {
     const entry = manifest.find((e) => e.name === modelName);
 
     if (!entry) {
-      console.log(`[models:POST] Rejected: Unknown model "${modelName}". Available: ${manifest.map(e => e.name).join(', ')}`);
       return NextResponse.json(
         { error: `Unknown model: ${modelName}` },
         { status: 404 }
       );
     }
 
-    console.log(`[models:POST] Found entry: hfRepo=${entry.hfRepo}, hfFile=${entry.hfFile}`);
-
     // Check if already downloaded
     const status = checkLocalModel(entry);
-    console.log(`[models:POST] checkLocalModel: exists=${status.exists}, sizeBytes=${status.sizeBytes}, downloadPercent=${status.downloadPercent}`);
 
     if (status.exists && status.downloadPercent === 100) {
-      console.log(`[models:POST] Rejected: ${modelName} already downloaded`);
       return NextResponse.json(
         { error: `Model ${modelName} is already downloaded`, status: 'already_downloaded' },
         { status: 409 }
@@ -121,7 +109,6 @@ export async function POST(request: Request) {
 
     // Check if already downloading
     if (activeDownloads.has(modelName)) {
-      console.log(`[models:POST] Rejected: ${modelName} already downloading`);
       return NextResponse.json(
         { error: `Model ${modelName} is already downloading`, status: 'already_downloading' },
         { status: 409 }
@@ -134,22 +121,15 @@ export async function POST(request: Request) {
       controller,
       progress: 0,
     });
-    console.log(`[models:POST] Starting background download for ${modelName}`);
 
     // Fire-and-forget: run download in background
     (async () => {
       try {
-        console.log(`[models:POST:bg] Calling downloadModel for ${modelName}`);
         await downloadModel(
           entry,
           (progress: DownloadProgress) => {
             const dlEntry = activeDownloads.get(modelName);
-            if (!dlEntry) {
-              console.log(`[models:POST:bg] Progress callback dropped — no active entry for ${modelName}`);
-              return;
-            }
-
-            console.log(`[models:POST:bg] Progress update for ${modelName}: status=${progress.status}, progress=${progress.progress ?? 'n/a'}, message=${progress.message ?? 'n/a'}, error=${progress.error ?? 'n/a'}`);
+            if (!dlEntry) return;
 
             if (progress.progress !== undefined) {
               dlEntry.progress = progress.progress;
@@ -157,25 +137,19 @@ export async function POST(request: Request) {
             if (progress.downloaded !== undefined) {
               dlEntry.downloaded = progress.downloaded;
             }
-
             if (progress.status === 'failed' && progress.error) {
-              console.log(`[models:POST:bg] Setting error for ${modelName}: ${progress.error}`);
               dlEntry.error = progress.error;
             }
           },
           controller.signal
         );
-        console.log(`[models:POST:bg] downloadModel completed successfully for ${modelName}`);
       } catch (err: any) {
-        console.error(`[models:POST:bg] downloadModel threw for ${modelName}: ${err.message || err}`);
-        // Error captured via onProgress callback
+        console.error(`[models] Download failed for ${modelName}: ${err.message || err}`);
       } finally {
-        console.log(`[models:POST:bg] Cleaning up activeDownloads for ${modelName}`);
         activeDownloads.delete(modelName);
       }
     })();
 
-    console.log(`[models:POST] Returning success for ${modelName}`);
     return NextResponse.json({
       name: modelName,
       status: 'started',
