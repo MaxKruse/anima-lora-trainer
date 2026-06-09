@@ -1,5 +1,6 @@
 """GPU detection and pyproject.toml generation for LoRA Matrix Trainer."""
 
+from pathlib import Path
 from typing import Optional
 
 
@@ -56,3 +57,120 @@ def _extract_gpu_name(nvidia_smi_output: str) -> str:
             return line.strip()
 
     return nvidia_smi_output.strip()
+
+
+# --- pyproject.toml generation ---
+
+_REQUIRED_DEPS = [
+    "torch",
+    "torchvision",
+    "accelerate",
+    "transformers",
+    "diffusers[torch]",
+    "safetensors",
+    "bitsandbytes",
+    "lion-pytorch",
+    "pytorch-optimizer",
+    "prodigyopt",
+    "prodigy-plus-schedule-free",
+    "schedulefree",
+    "sentencepiece",
+    "toml",
+    "rich",
+    "numpy",
+    "einops",
+    "opencv-python",
+    "ftfy",
+    "huggingface-hub",
+    "tensorboard",
+    "voluptuous",
+    "imagesize",
+]
+
+_PYPROJECT_TEMPLATE = """\
+[project]
+name = "lora-matrix-trainer"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+{deps}
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-cov",
+]
+
+# --- CUDA 12.8 index (RTX 30/40 series) ---
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+# --- CUDA 13.0 index (RTX 50 series) ---
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+# --- Active CUDA index routing ---
+[tool.uv.sources]
+torch = [
+    {{ index = "pytorch-{cuda}", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }},
+]
+torchvision = [
+    {{ index = "pytorch-{cuda}", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }},
+]
+"""
+
+
+def generate_pyproject_toml(output_path: str, cuda_version: str) -> None:
+    """Generate a pyproject.toml with correct CUDA index routing.
+
+    Args:
+        output_path: File path to write pyproject.toml.
+        cuda_version: Either "cu128" or "cu130".
+    """
+    if cuda_version not in ("cu128", "cu130"):
+        raise ValueError(f"Invalid CUDA version: {cuda_version}. Must be cu128 or cu130.")
+
+    deps_str = "\n".join(f'    "{dep}",\n' for dep in _REQUIRED_DEPS)
+    content = _PYPROJECT_TEMPLATE.format(deps=deps_str, cuda=cuda_version)
+
+    Path(output_path).write_text(content)
+
+
+def run_setup(output_dir: Optional[str] = None) -> dict:
+    """Run full setup: detect GPU, generate pyproject.toml.
+
+    Args:
+        output_dir: Directory to write pyproject.toml (default: current dir).
+
+    Returns:
+        dict with gpu detection results.
+    """
+    import subprocess
+
+    # Detect GPU
+    try:
+        result = subprocess.run(
+            ["nvidia-smi"], capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            raise NvidiaSmiError(f"nvidia-smi failed: {result.stderr.strip()}")
+    except FileNotFoundError:
+        raise NvidiaSmiError("nvidia-smi not found. Ensure NVIDIA drivers are installed.")
+
+    gpu_info = detect_gpu(result.stdout)
+
+    # Generate pyproject.toml
+    import os
+    target_dir = output_dir or os.getcwd()
+    toml_path = os.path.join(target_dir, "pyproject.toml")
+    generate_pyproject_toml(toml_path, gpu_info["cuda"])
+
+    return {
+        **gpu_info,
+        "pyproject_path": toml_path,
+    }
