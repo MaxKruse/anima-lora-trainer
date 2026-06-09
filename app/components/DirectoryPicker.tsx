@@ -10,6 +10,7 @@ interface DirectoryPickerProps {
   hint?: string;
   error?: string;
   id?: string;
+  autoVerify?: boolean;
 }
 
 /**
@@ -19,6 +20,9 @@ interface DirectoryPickerProps {
  * On browsers that support showDirectoryPicker, the "Browse" button opens
  * a native folder selection dialog. The path text input always works as a
  * fallback for manual entry.
+ *
+ * When autoVerify is true, the directory is checked automatically when the
+ * value changes (debounced). When false, the user must click "Check" manually.
  */
 export function DirectoryPicker({
   label,
@@ -28,11 +32,13 @@ export function DirectoryPicker({
   hint,
   error,
   id,
+  autoVerify = true,
 }: DirectoryPickerProps) {
   const [isPickerSupported, setIsPickerSupported] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verifyStatus, setVerifyStatus] = useState<'ok' | 'fail' | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Detect File System Access API support
   useEffect(() => {
@@ -40,6 +46,35 @@ export function DirectoryPicker({
       typeof window !== 'undefined' && 'showDirectoryPicker' in window
     );
   }, []);
+
+  // Auto-verify when value changes (debounced)
+  useEffect(() => {
+    if (!autoVerify || !value.trim() || verifying) return;
+
+    // Clear any pending debounce
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
+    debounceRef.current = setTimeout(async () => {
+      setVerifyStatus(null);
+      try {
+        const res = await fetch('/api/config/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: value }),
+        });
+        const data = await res.json();
+        setVerifyStatus(res.ok && data.exists ? 'ok' : 'fail');
+      } catch {
+        setVerifyStatus('fail');
+      }
+    }, 400);
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [value, autoVerify, verifying]);
 
   const handleBrowse = useCallback(async () => {
     if (!isPickerSupported) return;
@@ -128,15 +163,29 @@ export function DirectoryPicker({
           </button>
         )}
 
-        <button
-          type="button"
-          onClick={handleVerify}
-          disabled={verifying || !value.trim()}
-          className="px-3 py-2 text-sm bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
-          title="Check if directory exists"
-        >
-          {verifying ? '...' : 'Check'}
-        </button>
+        {!autoVerify && (
+          <button
+            type="button"
+            onClick={handleVerify}
+            disabled={verifying || !value.trim()}
+            className="px-3 py-2 text-sm bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+            title="Check if directory exists"
+          >
+            {verifying ? '...' : 'Check'}
+          </button>
+        )}
+
+        {autoVerify && verifying && (
+          <span className="px-2 py-1 text-sm text-gray-400">
+            ...
+          </span>
+        )}
+
+        {autoVerify && !verifying && verifyStatus === null && value.trim() && (
+          <span className="px-2 py-1 text-sm text-gray-400">
+            ...
+          </span>
+        )}
 
         {value && (
           <button

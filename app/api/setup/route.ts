@@ -31,12 +31,25 @@ export function runCommand(
 }
 
 /**
+ * Extract CUDA toolkit version from nvidia-smi output.
+ * e.g., "CUDA Version: 12.8" → "12.8"
+ */
+export function extractCudaVersion(nvidiaOutput: string): string | null {
+  for (const line of nvidiaOutput.split('\n')) {
+    const match = line.match(/CUDA Version[:\s]+([\d.]+)/i);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+/**
  * Detect GPU from nvidia-smi output.
  */
 export function parseGpuInfo(nvidiaOutput: string): {
   cuda: string;
   series: string;
   gpuName: string;
+  cudaVersion: string | null;
 } | null {
   if (!nvidiaOutput || !nvidiaOutput.trim()) return null;
 
@@ -50,12 +63,15 @@ export function parseGpuInfo(nvidiaOutput: string): {
   }
   if (!gpuName) gpuName = nvidiaOutput.trim();
 
+  // Extract CUDA toolkit version
+  const cudaVersion = extractCudaVersion(nvidiaOutput);
+
   if (gpuName.includes('RTX 50')) {
-    return { cuda: 'cu130', series: 'blackwell', gpuName };
+    return { cuda: 'cu130', series: 'blackwell', gpuName, cudaVersion };
   } else if (gpuName.includes('RTX 40')) {
-    return { cuda: 'cu128', series: 'ada', gpuName };
+    return { cuda: 'cu128', series: 'ada', gpuName, cudaVersion };
   } else if (gpuName.includes('RTX 30')) {
-    return { cuda: 'cu128', series: 'ampere', gpuName };
+    return { cuda: 'cu128', series: 'ampere', gpuName, cudaVersion };
   }
 
   return null;
@@ -113,6 +129,7 @@ export async function POST() {
       gpu: gpuInfo.gpuName,
       series: gpuInfo.series,
       cuda: gpuInfo.cuda,
+      cudaVersion: gpuInfo.cudaVersion,
       pyprojectPath,
       status: 'ok',
     });

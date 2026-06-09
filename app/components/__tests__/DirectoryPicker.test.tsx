@@ -108,7 +108,22 @@ describe('DirectoryPicker', () => {
     expect(onChange).toHaveBeenCalledWith('');
   });
 
-  it('displays Check button', () => {
+  it('displays Check button when autoVerify is false', () => {
+    render(
+      <DirectoryPicker
+        label="Test"
+        value="/some/path"
+        onChange={() => {}}
+        id="test"
+        autoVerify={false}
+      />
+    );
+
+    const checkButton = screen.getByTitle('Check if directory exists');
+    expect(checkButton).toBeInTheDocument();
+  });
+
+  it('hides Check button when autoVerify is true (default)', () => {
     render(
       <DirectoryPicker
         label="Test"
@@ -118,8 +133,8 @@ describe('DirectoryPicker', () => {
       />
     );
 
-    const checkButton = screen.getByTitle('Check if directory exists');
-    expect(checkButton).toBeInTheDocument();
+    const checkButtons = screen.queryAllByTitle('Check if directory exists');
+    expect(checkButtons).toHaveLength(0);
   });
 
   it('Check button is disabled when value is empty', () => {
@@ -129,6 +144,7 @@ describe('DirectoryPicker', () => {
         value=""
         onChange={() => {}}
         id="test"
+        autoVerify={false}
       />
     );
 
@@ -136,7 +152,7 @@ describe('DirectoryPicker', () => {
     expect(checkButton).toBeDisabled();
   });
 
-  it('calls verify API when Check is clicked', async () => {
+  it('calls verify API when Check is clicked (manual mode)', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({ exists: true }),
@@ -149,6 +165,7 @@ describe('DirectoryPicker', () => {
         value="/existing/path"
         onChange={onChange}
         id="test"
+        autoVerify={false}
       />
     );
 
@@ -164,7 +181,7 @@ describe('DirectoryPicker', () => {
     });
   });
 
-  it('shows success message when directory exists', async () => {
+  it('auto-verifies when value changes (autoVerify default)', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({ exists: true }),
@@ -179,15 +196,37 @@ describe('DirectoryPicker', () => {
       />
     );
 
-    const checkButton = screen.getByTitle('Check if directory exists');
-    fireEvent.click(checkButton);
+    // Auto-verify should fire on mount with existing value
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith('/api/config/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: '/existing/path' }),
+      });
+    });
+  });
+
+  it('shows success message when directory exists (auto-verify)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ exists: true }),
+    });
+
+    render(
+      <DirectoryPicker
+        label="Test"
+        value="/existing/path"
+        onChange={() => {}}
+        id="test"
+      />
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/Directory exists/)).toBeInTheDocument();
     });
   });
 
-  it('shows warning when directory does not exist', async () => {
+  it('shows warning when directory does not exist (auto-verify)', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({ exists: false }),
@@ -201,9 +240,6 @@ describe('DirectoryPicker', () => {
         id="test"
       />
     );
-
-    const checkButton = screen.getByTitle('Check if directory exists');
-    fireEvent.click(checkButton);
 
     await waitFor(() => {
       expect(screen.getByText(/Directory not found/)).toBeInTheDocument();

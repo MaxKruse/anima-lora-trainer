@@ -6,6 +6,7 @@ interface SetupResult {
   gpu: string;
   series: string;
   cuda: string;
+  cudaVersion?: string;
   pyprojectPath?: string;
   status: 'ok' | 'error';
 }
@@ -77,7 +78,11 @@ export function SetupWizard() {
               <dd className="font-medium capitalize">{result.series}</dd>
             </div>
             <div>
-              <dt className="text-gray-600">CUDA Version:</dt>
+              <dt className="text-gray-600">CUDA Toolkit:</dt>
+              <dd className="font-medium">{result.cudaVersion || 'Unknown'}</dd>
+            </div>
+            <div>
+              <dt className="text-gray-600">PyTorch Index:</dt>
               <dd className="font-medium">{result.cuda}</dd>
             </div>
             {result.pyprojectPath && (

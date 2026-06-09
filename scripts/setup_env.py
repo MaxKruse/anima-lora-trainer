@@ -16,7 +16,7 @@ def detect_gpu(nvidia_smi_output: Optional[str]) -> dict:
     """Parse nvidia-smi output and classify GPU into CUDA tier.
 
     Returns:
-        dict with keys: cuda (str), series (str), gpu_name (str)
+        dict with keys: cuda (str), series (str), gpu_name (str), cuda_version (str|None)
 
     Raises:
         NvidiaSmiError: If output is empty or None.
@@ -28,13 +28,16 @@ def detect_gpu(nvidia_smi_output: Optional[str]) -> dict:
     # Extract GPU name from output
     gpu_name = _extract_gpu_name(nvidia_smi_output)
 
+    # Extract CUDA toolkit version
+    cuda_version = _extract_cuda_version(nvidia_smi_output)
+
     # Classify by series
     if "RTX 50" in gpu_name:
-        return {"cuda": "cu130", "series": "blackwell", "gpu_name": gpu_name}
+        return {"cuda": "cu130", "series": "blackwell", "gpu_name": gpu_name, "cuda_version": cuda_version}
     elif "RTX 40" in gpu_name:
-        return {"cuda": "cu128", "series": "ada", "gpu_name": gpu_name}
+        return {"cuda": "cu128", "series": "ada", "gpu_name": gpu_name, "cuda_version": cuda_version}
     elif "RTX 30" in gpu_name:
-        return {"cuda": "cu128", "series": "ampere", "gpu_name": gpu_name}
+        return {"cuda": "cu128", "series": "ampere", "gpu_name": gpu_name, "cuda_version": cuda_version}
     else:
         raise UnsupportedGpuError(
             f"GPU '{gpu_name}' is not supported. "
@@ -57,6 +60,22 @@ def _extract_gpu_name(nvidia_smi_output: str) -> str:
             return line.strip()
 
     return nvidia_smi_output.strip()
+
+
+def _extract_cuda_version(nvidia_smi_output: str) -> Optional[str]:
+    """Extract CUDA toolkit version from nvidia-smi output.
+
+    Searches for 'CUDA Version: X.Y' pattern.
+    Returns version string like '12.8' or None if not found.
+    """
+    import re
+
+    for line in nvidia_smi_output.splitlines():
+        match = re.search(r'CUDA Version[:\s]+([\d.]+)', line, re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+    return None
 
 
 # --- pyproject.toml generation ---

@@ -89,30 +89,11 @@ export function Dashboard() {
     async (params: TrainingParams) => {
       setTrainingResponse(null);
 
-      // Validate directories
-      const newErrors: Record<string, string> = {};
-      if (!config.trainingImagesDir.trim()) {
-        newErrors.trainingImagesDir = 'Training images directory is required';
-      }
-      if (!config.outputDir.trim()) {
-        newErrors.outputDir = 'Output directory is required';
-      }
-      if (Object.keys(newErrors).length > 0) {
-        setConfigErrors(newErrors);
-        return;
-      }
-
       try {
-        // Use the configured directories for the actual paths
-        const payload = {
-          ...params,
-          trainingImages: config.trainingImagesDir || params.trainingImages,
-        };
-
         const res = await fetch('/api/train', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          body: JSON.stringify(params),
         });
 
         const data = await res.json();
@@ -128,7 +109,7 @@ export function Dashboard() {
         setTrainingResponse(`Error: ${err.message || 'Network error'}`);
       }
     },
-    [config]
+    []
   );
 
   const sections: { key: DashboardSection; label: string; icon: string }[] = [
@@ -244,7 +225,10 @@ export function Dashboard() {
                 />
               </div>
 
-              <AnimaTab onSubmit={handleTrainingSubmit} />
+              <AnimaTab
+                trainingImagesPath={config.trainingImagesDir}
+                onSubmit={handleTrainingSubmit}
+              />
 
               {trainingResponse && (
                 <div

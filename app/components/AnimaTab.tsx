@@ -5,6 +5,11 @@ import { trainingSchema, type TrainingParams } from '../lib/training-schema';
 
 interface AnimaTabProps {
   onSubmit: (params: TrainingParams) => void;
+  /**
+   * When provided, the training images path is pre-filled and the field
+   * is hidden (managed by the parent directory picker).
+   */
+  trainingImagesPath?: string;
 }
 
 const OPTIMIZERS = ['AdamW8Bit', 'AdamW', 'Prodigy', 'Lion', 'Adafactor'];
@@ -27,10 +32,11 @@ const DEFAULT_PARAMS: Omit<TrainingParams, 'trainingImages' | 'loraName'> = {
   cacheTextEncoder: true,
 };
 
-export function AnimaTab({ onSubmit }: AnimaTabProps) {
+export function AnimaTab({ onSubmit, trainingImagesPath }: AnimaTabProps) {
+  const isManagedExternally = trainingImagesPath !== undefined;
   const [params, setParams] = useState({
     ...DEFAULT_PARAMS,
-    trainingImages: '',
+    trainingImages: trainingImagesPath || '',
     loraName: '',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -51,7 +57,7 @@ export function AnimaTab({ onSubmit }: AnimaTabProps) {
   function validate(): boolean {
     const newErrors: Record<string, string> = {};
 
-    if (!params.trainingImages.trim()) {
+    if (!isManagedExternally && !params.trainingImages.trim()) {
       newErrors.trainingImages = 'Training images path is required';
     }
     if (!params.loraName.trim()) {
@@ -79,8 +85,13 @@ export function AnimaTab({ onSubmit }: AnimaTabProps) {
 
     setSubmitting(true);
     try {
+      // Use external path if provided
+      const finalParams = isManagedExternally
+        ? { ...params, trainingImages: trainingImagesPath! }
+        : params;
+
       // Validate against zod schema
-      const result = trainingSchema.safeParse(params);
+      const result = trainingSchema.safeParse(finalParams);
       if (!result.success) {
         const zodErrors: Record<string, string> = {};
         (result.error.issues || []).forEach((issue) => {
@@ -224,7 +235,19 @@ export function AnimaTab({ onSubmit }: AnimaTabProps) {
             Data
           </h3>
           <div className="grid grid-cols-2 gap-4">
-            {renderTextInput('Training Images Path', 'trainingImages', '/path/to/images')}
+            {isManagedExternally ? (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Training Images
+                </label>
+                <div className="px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md text-sm font-mono text-gray-500 dark:text-gray-400 truncate">
+                  {trainingImagesPath}
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Set in directory picker above</p>
+              </div>
+            ) : (
+              renderTextInput('Training Images Path', 'trainingImages', '/path/to/images')
+            )}
             {renderTextInput('LoRA Name', 'loraName', 'my-lora')}
           </div>
         </section>

@@ -138,6 +138,7 @@ describe('parseGpuInfo', () => {
       cuda: 'cu130',
       series: 'blackwell',
       gpuName: 'NVIDIA GeForce RTX 5090',
+      cudaVersion: null,
     });
   });
 
@@ -148,6 +149,7 @@ describe('parseGpuInfo', () => {
       cuda: 'cu128',
       series: 'ada',
       gpuName: 'NVIDIA GeForce RTX 4090',
+      cudaVersion: null,
     });
   });
 
@@ -158,7 +160,16 @@ describe('parseGpuInfo', () => {
       cuda: 'cu128',
       series: 'ampere',
       gpuName: 'NVIDIA GeForce RTX 3080',
+      cudaVersion: null,
     });
+  });
+
+  it('extracts CUDA toolkit version from output', async () => {
+    const parseGpuInfo = await getParseGpuInfo();
+    const result = parseGpuInfo(
+      "NVIDIA-SMI 535.00\nGPU Name: NVIDIA GeForce RTX 4090\nCUDA Version: 12.8"
+    );
+    expect(result?.cudaVersion).toBe('12.8');
   });
 
   it('returns null for unsupported GPU', async () => {
