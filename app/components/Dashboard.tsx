@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { DirectoryPicker } from './DirectoryPicker';
-import { AnimaTab } from './AnimaTab';
+import { TrainTabs } from './TrainTabs';
 import { MatrixToggle } from './MatrixToggle';
 import { JobList } from './JobList';
 import { SetupWizard } from './SetupWizard';
@@ -224,7 +224,7 @@ export function Dashboard() {
                 />
               </div>
 
-              <AnimaTab
+              <TrainTabs
                 trainingImagesPath={config.trainingImagesDir}
                 onSubmit={handleTrainingSubmit}
               />
