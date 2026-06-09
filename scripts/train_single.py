@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,16 @@ if _project_root not in sys.path:
 
 from scripts.command_builder import build_training_command
 from scripts.dataset_toml import generate_dataset_toml
+
+
+# CamelCase -> snake_case converter (TS sends camelCase, Python expects snake_case)
+def _camel_to_snake(name: str) -> str:
+    s1 = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+
+
+def _normalize_params(params: dict) -> dict:
+    return {_camel_to_snake(k): v for k, v in params.items()}
 
 
 def run_training(params: dict) -> dict:
@@ -125,6 +136,10 @@ def main():
             params = json.load(f)
     else:
         params = json.loads(args.params_json)
+
+    # Normalize camelCase (from TS) -> snake_case (expected by Python)
+    params = _normalize_params(params)
+
     result = run_training(params)
 
     if result["status"] == "completed":
