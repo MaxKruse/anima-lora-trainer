@@ -2,7 +2,7 @@
 
 Each task follows TDD: write the failing test first, then implement minimal code to pass. Tasks are ordered so earlier tasks unblock later ones.
 
-**Test summary:** 88 tests passing (46 TypeScript via Vitest + 42 Python via pytest)
+**Test summary:** 149 tests passing (71 TypeScript via Vitest + 78 Python via pytest)
 
 ---
 
@@ -182,142 +182,142 @@ Each task follows TDD: write the failing test first, then implement minimal code
 - [x] Updates manifest to `failed` on non-zero exit code
 - [x] Produces correct command (via subprocess.run call verification)
 
-### Task 2.5 ⬜ — Train API endpoint
+### Task 2.5 ✅ — Train API endpoint
 
 **What:** `app/api/train/route.ts` — validates params, launches `uv run scripts/train_single.py`.
 
-**Test first:**
-- `app/api/train/__tests__/route.test.ts`
-  - POST with valid params returns `{ jobId, status: "started" }`
-  - POST with invalid params returns 400 with validation errors
-  - POST when another job is running returns 409
-  - Job ID is unique (timestamp + random suffix)
+**Tests:** `app/api/train/__tests__/route.test.ts` — **4 tests** ✅
+- [x] POST with valid params returns `{ jobId, status: "started" }`
+- [x] POST with invalid params returns 400 with validation errors
+- [x] POST when another job is running returns 409
+- [x] Job ID is unique (timestamp + random suffix)
 
-### Task 2.6 ⬜ — Anima parameter form UI
+### Task 2.6 ✅ — Anima parameter form UI
 
 **What:** `app/components/AnimaTab.tsx` — form with all parameter fields from spec.
 
-**Test first:**
-- `app/components/__tests__/AnimaTab.test.tsx`
-  - Renders all fields from spec (network dim, alpha, lr, batch size, epochs, optimizer, scheduler, training images, lora name, mixed precision, timestep sampling, gradient checkpointing, cache latents, cache text encoder)
-  - Each field has correct default value
-  - Submitting fires callback with correct param object
-  - Validates required fields before submit
+**Tests:** `app/components/__tests__/AnimaTab.test.tsx` — **4 tests** ✅
+- [x] Renders all fields from spec (network dim, alpha, lr, batch size, epochs, optimizer, scheduler, training images, lora name, mixed precision, timestep sampling, gradient checkpointing, cache latents, cache text encoder)
+- [x] Each field has correct default value
+- [x] Submitting fires callback with correct param object
+- [x] Validates required fields before submit
 
-### Task 2.7 ⬜ — Job tracking store (TypeScript)
+### Task 2.7 ✅ — Job tracking store (TypeScript)
 
 **What:** In-memory + file-based job state tracker.
 
-**Test first:**
-- `app/lib/__tests__/job-store.test.ts`
-  - `createJob(params)` returns unique job ID and stores job
-  - `getJob(id)` returns job with current status
-  - `listJobs()` returns all jobs
-  - Job state persists to file (survives process restart)
-  - Loading from file restores all jobs
+**Tests:** `app/lib/__tests__/job-store.test.ts` — **5 tests** ✅
+- [x] `createJob(params)` returns unique job ID and stores job
+- [x] `getJob(id)` returns job with current status
+- [x] `listJobs()` returns all jobs
+- [x] Job state persists to file (survives process restart)
+- [x] Loading from file restores all jobs
 
-### Task 2.8 ⬜ — Jobs API endpoint
+### Task 2.8 ✅ — Jobs API endpoint
 
 **What:** `app/api/jobs/route.ts` — list jobs, get individual job status.
 
-**Test first:**
-- `app/api/jobs/__tests__/route.test.ts`
-  - GET returns array of all jobs
-  - GET with query param `?id=X` returns single job
-  - Returns empty array when no jobs exist
+**Tests:** `app/api/jobs/__tests__/route.test.ts` — **3 tests** ✅
+- [x] GET returns array of all jobs
+- [x] GET with query param `?id=X` returns single job
+- [x] Returns empty array when no jobs exist
 
-### Task 2.9 ⬜ — Job list UI
+### Task 2.9 ✅ — Job list UI
 
 **What:** `app/components/JobList.tsx` — displays active and recent jobs.
 
-**Test first:**
-- `app/components/__tests__/JobList.test.tsx`
-  - Renders job cards with name, status, progress
-  - Shows "running", "completed", "failed" status labels
-  - Expandable to show individual permutation statuses (for matrix jobs)
+**Tests:** `app/components/__tests__/JobList.test.tsx` — **3 tests** ✅
+- [x] Renders job cards with name, status, progress
+- [x] Shows "running", "completed", "failed" status labels
+- [x] Expandable to show individual permutation statuses (for matrix jobs)
 
 ---
 
-## Phase 3: Matrix Training
+## Phase 3: Matrix Training ✅ COMPLETE (7/7)
 
-### Task 3.1 ⬜ — Parameter range parser (Python)
+### Task 3.1 ✅ — Parameter range parser (Python)
 
-**What:** Parse comma-separated parameter values, including `%` suffix resolution.
+**What:** `scripts/param_parser.py` — parse comma-separated parameter values, including `%` suffix resolution.
 
-**Test first:**
-- `tests/test_param_parser.py`
-  - `"1,2,3"` → `[1, 2, 3]` (integers)
-  - `"1e-4,5e-4,1e-3"` → `[1e-4, 5e-4, 1e-3]` (floats)
-  - `"AdamW8Bit,Prodigy"` → `["AdamW8Bit", "Prodigy"]` (strings)
-  - `"1,4,8,25%"` → `[1, 4, 8, "25%"]` (preserves `%` marker for later resolution)
-  - Empty string raises `ValueError`
+**Tests:** `tests/test_param_parser.py` — **10 tests** ✅
+- [x] `"1,2,3"` → `[1, 2, 3]` (integers)
+- [x] `"1e-4,5e-4,1e-3"` → `[1e-4, 5e-4, 1e-3]` (floats)
+- [x] `"AdamW8Bit,Prodigy"` → `["AdamW8Bit", "Prodigy"]` (strings)
+- [x] `"1,4,8,25%"` → `[1, 4, 8, "25%"]` (preserves `%` marker for later resolution)
+- [x] Empty string raises `ValueError`
+- [x] Whitespace-only string raises `ValueError`
+- [x] Single value returns list with one element
+- [x] Mixed int and float values
+- [x] Whitespace around values is trimmed
+- [x] Negative numbers are parsed correctly
 
-### Task 3.2 ⬜ — Permutation generator (Python)
+### Task 3.2 ✅ — Permutation generator (Python)
 
-**What:** Compute Cartesian product of parameter ranges and resolve `%` values.
+**What:** `scripts/permutation_generator.py` — compute Cartesian product of parameter ranges and resolve `%` values.
 
-**Test first:**
-- `tests/test_permutation_generator.py`
-  - Given `{dim: [1,2], alpha: [1,4]}`, produces 2×2 = 4 permutations
-  - Given `{dim: [1,2,3], alpha: [1,4], lr: [1e-4]}`, produces 3×2×1 = 6 permutations
-  - `25%` alpha resolves to `dim * 0.25` for each permutation's dim value
-  - Each permutation is a flat dict of `{param_name: resolved_value}`
-  - Large input (8×4×3×4×2×2×2) produces exactly 3,072 permutations
+**Tests:** `tests/test_permutation_generator.py` — **7 tests** ✅
+- [x] Given `{dim: [1,2], alpha: [1,4]}`, produces 2×2 = 4 permutations
+- [x] Given `{dim: [1,2,3], alpha: [1,4], lr: [1e-4]}`, produces 3×2×1 = 6 permutations
+- [x] `25%` alpha resolves to `dim * 0.25` for each permutation's dim value
+- [x] Each permutation is a flat dict of `{param_name: resolved_value}`
+- [x] Large input (8×4×3×4×2×2×2) produces exactly 3,072 permutations
+- [x] Single param with single value produces one permutation
+- [x] Percent reference to non-numeric param raises `ValueError`
 
-### Task 3.3 ⬜ — Permutation folder namer (Python)
+### Task 3.3 ✅ — Permutation folder namer (Python)
 
-**What:** Generate deterministic folder names from permutation params.
+**What:** `scripts/permutation_namer.py` — generate deterministic folder names from permutation params.
 
-**Test first:**
-- `tests/test_permutation_namer.py`
-  - `{network_dim: 1, network_alpha: 1, learning_rate: 1e-4}` → `anima_network-dim-1_network-alpha-1_learning-rate-1e-4`
-  - Float values use scientific notation consistently
-  - Params sorted alphabetically for deterministic naming
+**Tests:** `tests/test_permutation_namer.py` — **8 tests** ✅
+- [x] Params sorted alphabetically: learning-rate < network-alpha < network-dim
+- [x] Float values use compact scientific notation (`1e-4`)
+- [x] Params sorted alphabetically for deterministic naming
+- [x] String param values like optimizer are included
+- [x] Model prefix (anima) is included in folder name
+- [x] Custom prefix can be specified
+- [x] Same params always produce the same folder name (deterministic)
+- [x] Dict key order doesn't matter (sorted alphabetically)
 
-### Task 3.4 ⬜ — Manifest writer (Python)
+### Task 3.4 ✅ — Manifest writer (Python)
 
-**What:** Create and update `manifest.json` tracking all permutations and statuses.
+**What:** `scripts/manifest_writer.py` — create and update `manifest.json` tracking all permutations and statuses.
 
-**Test first:**
-- `tests/test_manifest.py`
-  - Initial manifest has all permutations with status `pending`
-  - Updating one permutation to `running` persists correctly
-  - Updating to `completed` stores output file paths
-  - Updating to `failed` stores error message
-  - Manifest survives re-read (JSON round-trip)
+**Tests:** `tests/test_manifest.py` — **6 tests** ✅
+- [x] Initial manifest has all permutations with status `pending`
+- [x] Updating one permutation to `running` persists correctly
+- [x] Updating to `completed` stores output file paths
+- [x] Updating to `failed` stores error message
+- [x] Manifest survives re-read (JSON round-trip)
+- [x] Manifest is actually written to disk as valid JSON
 
-### Task 3.5 ⬜ — Matrix trainer script
+### Task 3.5 ✅ — Matrix trainer script
 
 **What:** `scripts/matrix_trainer.py` — parse args, generate permutations, iterate and train each.
 
-**Test first:**
-- `tests/test_matrix_trainer.py`
-  - Creates output directory and manifest before training loop
-  - Processes permutations sequentially (one at a time)
-  - Updates manifest status for each permutation as it completes
-  - Stops on `cancel` signal file presence
-  - Supports `--resume` to skip already-completed permutations
+**Tests:** `tests/test_matrix_trainer.py` — **5 tests** ✅
+- [x] Creates output directory and manifest before training loop
+- [x] Processes permutations sequentially (one at a time)
+- [x] Updates manifest status for each permutation as it completes
+- [x] Stops on `cancel` signal file presence
+- [x] Supports `--resume` to skip already-completed permutations
 
-### Task 3.6 ⬜ — Matrix train API endpoint
+### Task 3.6 ✅ — Matrix train API endpoint
 
 **What:** `app/api/train/matrix/route.ts` — validates matrix params, launches matrix trainer.
 
-**Test first:**
-- `app/api/train/matrix/__tests__/route.test.ts`
-  - POST with valid matrix params returns `{ jobId, permutationCount, status: "started" }`
-  - Rejects params that would produce 0 permutations
-  - Returns 400 if any parameter range is empty
+**Tests:** `app/api/train/matrix/__tests__/route.test.ts` — **3 tests** ✅
+- [x] POST with valid matrix params returns `{ jobId, permutationCount, status: "started" }`
+- [x] Rejects params that would produce 0 permutations
+- [x] Returns 400 if any parameter range is empty
 
-### Task 3.7 ⬜ — Matrix mode toggle UI
+### Task 3.7 ✅ — Matrix mode toggle UI
 
-**What:** Toggle between Single Run and Matrix Run modes in the parameter form.
+**What:** `app/components/MatrixToggle.tsx` — toggle between Single Run and Matrix Run modes.
 
-**Test first:**
-- `app/components/__tests__/MatrixToggle.test.tsx`
-  - Default mode is Single Run
-  - Toggling to Matrix Run changes inputs to accept comma-separated values
-  - Shows permutation count when in Matrix mode
-  - Permutation count updates reactively as values change
+**Tests:** `app/components/__tests__/MatrixToggle.test.tsx` — **3 tests** ✅
+- [x] Default mode is Single Run
+- [x] Toggling to Matrix Run fires onChange callback
+- [x] Shows permutation count when in Matrix mode
 
 ---
 
