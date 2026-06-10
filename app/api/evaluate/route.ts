@@ -4,7 +4,27 @@ import path from 'path';
 import fs from 'fs';
 
 const PROJECT_ROOT = path.resolve(process.cwd());
-const OUTPUT_DIR = path.join(PROJECT_ROOT, 'output');
+const CONFIG_DIR = path.join(PROJECT_ROOT, '.config');
+const CONFIG_FILE = path.join(CONFIG_DIR, 'app-config.json');
+
+function loadConfig(): { outputDir: string } {
+  try {
+    if (!fs.existsSync(CONFIG_FILE)) {
+      return { outputDir: path.join(PROJECT_ROOT, 'output') };
+    }
+    const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
+    const saved = JSON.parse(raw);
+    return {
+      outputDir: saved.outputDir || path.join(PROJECT_ROOT, 'output'),
+    };
+  } catch {
+    return { outputDir: path.join(PROJECT_ROOT, 'output') };
+  }
+}
+
+function getOutputDir(): string {
+  return loadConfig().outputDir;
+}
 
 /**
  * Track which runs are currently being evaluated.
@@ -26,7 +46,7 @@ export function __resetEvalState(): void {
  * Resolve the run directory for a given run ID.
  */
 function resolveRunDir(runId: string): string {
-  return path.join(OUTPUT_DIR, runId);
+  return path.join(getOutputDir(), runId);
 }
 
 /**

@@ -4,7 +4,23 @@ import path from 'path';
 import { getJobStore } from '../../lib/job-store';
 
 const PROJECT_ROOT = path.resolve(process.cwd());
-const DEFAULT_OUTPUT_DIR = path.join(PROJECT_ROOT, 'output');
+const CONFIG_DIR = path.join(PROJECT_ROOT, '.config');
+const CONFIG_FILE = path.join(CONFIG_DIR, 'app-config.json');
+
+function loadConfig(): { outputDir: string } {
+  try {
+    if (!fs.existsSync(CONFIG_FILE)) {
+      return { outputDir: path.join(PROJECT_ROOT, 'output') };
+    }
+    const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
+    const saved = JSON.parse(raw);
+    return {
+      outputDir: saved.outputDir || path.join(PROJECT_ROOT, 'output'),
+    };
+  } catch {
+    return { outputDir: path.join(PROJECT_ROOT, 'output') };
+  }
+}
 
 /**
  * Recursively search for a file in a directory.
@@ -41,8 +57,8 @@ function resolveOutputDir(runId: string): string | null {
     return job.params.outputDir;
   }
 
-  // Fall back to default output directory
-  const defaultDir = path.join(DEFAULT_OUTPUT_DIR, runId);
+  // Fall back to configured output directory
+  const defaultDir = path.join(loadConfig().outputDir, runId);
   if (fs.existsSync(defaultDir)) {
     return defaultDir;
   }

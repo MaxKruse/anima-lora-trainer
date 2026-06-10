@@ -6,6 +6,26 @@ import { getJobStore } from '../../../lib/job-store';
 import { createTrainingZip } from '../../../lib/training-zip';
 
 const PROJECT_ROOT = path.resolve(process.cwd());
+const CONFIG_DIR = path.join(PROJECT_ROOT, '.config');
+const CONFIG_FILE = path.join(CONFIG_DIR, 'app-config.json');
+
+/**
+ * Load the app config to get user's output directory setting.
+ */
+function loadConfig(): { outputDir: string } {
+  try {
+    if (!fs.existsSync(CONFIG_FILE)) {
+      return { outputDir: path.join(PROJECT_ROOT, 'output') };
+    }
+    const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
+    const saved = JSON.parse(raw);
+    return {
+      outputDir: saved.outputDir || path.join(PROJECT_ROOT, 'output'),
+    };
+  } catch {
+    return { outputDir: path.join(PROJECT_ROOT, 'output') };
+  }
+}
 
 /**
  * Parse a comma-separated parameter range string into an array.
@@ -95,8 +115,10 @@ export async function POST(request: Request) {
       permutationCount,
     });
 
-    // Create zip of training data (best-effort)
-    const outputDir = path.join(PROJECT_ROOT, 'output', jobId);
+    // Load config to get user's output directory
+    const config = loadConfig();
+    const userOutputDir = config.outputDir;
+    const outputDir = path.join(userOutputDir, jobId);
     const trainingImagesPath = (baseParams as any).trainingImages;
     let zipPath: string | null = null;
     if (trainingImagesPath) {

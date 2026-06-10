@@ -4,7 +4,27 @@ import path from 'path';
 import { loadResults } from '../../lib/results-loader';
 
 const PROJECT_ROOT = path.resolve(process.cwd());
-const OUTPUT_DIR = path.join(PROJECT_ROOT, 'output');
+const CONFIG_DIR = path.join(PROJECT_ROOT, '.config');
+const CONFIG_FILE = path.join(CONFIG_DIR, 'app-config.json');
+
+function loadConfig(): { outputDir: string } {
+  try {
+    if (!fs.existsSync(CONFIG_FILE)) {
+      return { outputDir: path.join(PROJECT_ROOT, 'output') };
+    }
+    const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
+    const saved = JSON.parse(raw);
+    return {
+      outputDir: saved.outputDir || path.join(PROJECT_ROOT, 'output'),
+    };
+  } catch {
+    return { outputDir: path.join(PROJECT_ROOT, 'output') };
+  }
+}
+
+function getOutputDir(): string {
+  return loadConfig().outputDir;
+}
 
 /**
  * GET /api/results
@@ -25,7 +45,7 @@ export async function GET(request: Request) {
 
     if (runId) {
       // Return detailed results for a specific run
-      const runDir = path.join(OUTPUT_DIR, runId);
+      const runDir = path.join(getOutputDir(), runId);
 
       if (!fs.existsSync(runDir)) {
         return NextResponse.json(
@@ -71,11 +91,12 @@ export async function GET(request: Request) {
     // Return list of all completed runs
     const runs = [];
 
-    if (fs.existsSync(OUTPUT_DIR)) {
-      const entries = fs.readdirSync(OUTPUT_DIR);
+    const outputDir = getOutputDir();
+    if (fs.existsSync(outputDir)) {
+      const entries = fs.readdirSync(outputDir);
 
       for (const entry of entries) {
-        const runDir = path.join(OUTPUT_DIR, entry);
+        const runDir = path.join(outputDir, entry);
         const manifestPath = path.join(runDir, 'manifest.json');
 
         if (fs.existsSync(manifestPath)) {
