@@ -63,10 +63,10 @@ describe('AnimaTab', () => {
       expect(optimizerSelect).toHaveValue('AdamW8Bit');
     }
 
-    // Default scheduler should be cosine
+    // Default scheduler should be constant
     const schedulerSelect = screen.getByLabelText(/scheduler/i);
     if (schedulerSelect.tagName === 'SELECT') {
-      expect(schedulerSelect).toHaveValue('cosine');
+      expect(schedulerSelect).toHaveValue('constant');
     }
 
     // Default mixed precision should be bf16

@@ -1,6 +1,7 @@
 """Matrix trainer script — parse args, generate permutations, iterate and train each.
 
-Delegates each permutation to train_single.py for the actual training.
+Generates a single test prompt from training data tags, then delegates each
+permutation to train_single.py for training + inference.
 """
 
 import json
@@ -34,6 +35,8 @@ def _normalize_params(params: dict) -> dict:
 from scripts.manifest_writer import ManifestWriter
 from scripts.permutation_generator import generate_permutations
 from scripts.permutation_namer import generate_folder_name
+from scripts.prompt_generator import generate_test_prompt
+from scripts.tag_extractor import extract_tags
 
 
 def run_matrix_training(
@@ -43,6 +46,9 @@ def run_matrix_training(
     base_params: dict | None = None,
 ) -> dict:
     """Run matrix training across all permutations.
+
+    Extracts tags from training data, generates a single test prompt,
+    then trains each permutation and runs inference with that prompt.
 
     Args:
         permutations: List of permutation parameter dicts.
@@ -60,6 +66,17 @@ def run_matrix_training(
     writer = ManifestWriter(manifest_path, permutations)
 
     cancel_file = output_path / "cancel"
+
+    # Extract tags from training data and generate a single test prompt
+    training_images = (base_params or {}).get("training_images", "")
+    if training_images:
+        all_tags = extract_tags(training_images)
+        test_prompt = generate_test_prompt(all_tags, num_tags=10, seed=42)
+        print(f"Extracted {len(all_tags)} tags from training data")
+        print(f"Test prompt: {test_prompt}")
+    else:
+        test_prompt = "masterpiece"
+        print("No training_images path — using default test prompt")
 
     # Determine which permutations to process
     if resume:
@@ -83,7 +100,7 @@ def run_matrix_training(
         writer.update_status(idx, "running")
 
         try:
-            result = _train_single(perm, perm_dir, output_dir, base_params)
+            result = _train_single(perm, perm_dir, output_dir, base_params, test_prompt)
             status = result["status"]
 
             if status == "completed":
@@ -123,6 +140,7 @@ def _train_single(
     perm_dir: Path,
     output_dir: str,
     base_params: dict | None = None,
+    test_prompt: str = "",
 ) -> dict:
     """Train a single permutation by delegating to train_single.py.
 
@@ -131,6 +149,7 @@ def _train_single(
         perm_dir: Output directory for this permutation.
         output_dir: Base output directory (unused, kept for compat).
         base_params: Base training parameters to merge with perm_params.
+        test_prompt: Prompt for post-training inference (shared across all runs).
 
     Returns:
         dict with status and optional output_files/error.
@@ -140,6 +159,10 @@ def _train_single(
     # Merge base params with permutation params
     params = {**(base_params or {}), **perm_params}
     params["output_dir"] = str(perm_dir)
+
+    # Attach test prompt for post-training inference
+    if test_prompt:
+        params["test_prompt"] = test_prompt
 
     # Write params to a temp file to avoid shell escaping issues
     params_file = perm_dir / "params.json"

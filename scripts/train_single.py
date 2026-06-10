@@ -7,6 +7,7 @@ from kohya-ss tqdm output, writing updates to the job manifest.
 import json
 import logging
 import os
+import random
 import re
 import subprocess
 import sys
@@ -135,6 +136,113 @@ def _write_manifest(path: Path, data: dict) -> None:
 def _parse_and_write_progress(progress: TrainingProgress, manifest_path: Path):
     """Write current progress to manifest file."""
     _write_manifest(manifest_path, progress.to_dict())
+
+
+# Default model paths for sd-cli inference (mirror command_builder.py MODEL_PATHS)
+_INFERENCE_MODELS = {
+    "diffusion_model": "models/diffusion_model/anima-base-v1.0.safetensors",
+    "vae": "models/vae/qwen_image_vae.safetensors",
+    "text_encoder": "models/text_encoder/qwen_3_06b_base.safetensors",
+}
+
+
+def run_inference(
+    output_dir: Path,
+    test_prompt: str,
+    diffusion_model: str | None = None,
+    vae_model: str | None = None,
+    llm_model: str | None = None,
+    seed: int = 42,
+) -> bool:
+    """Run sd-cli inference with the trained LoRA to generate sample images.
+
+    Finds the latest .safetensors checkpoint in output_dir, runs sd-cli
+    inference, and writes output to output_dir/sample_images/.
+
+    Args:
+        output_dir: Training output directory (contains .safetensors).
+        test_prompt: Prompt text for inference.
+        diffusion_model: Path to base diffusion model (default from config).
+        vae_model: Path to VAE model (default from config).
+        llm_model: Path to text encoder / LLM model (default from config).
+        seed: Random seed for deterministic generation.
+
+    Returns:
+        True if inference succeeded and produced at least one image.
+    """
+    # Find the latest LoRA checkpoint
+    safetensors_files = sorted(output_dir.glob("*.safetensors"), key=lambda p: p.name)
+    if not safetensors_files:
+        logger.warning("No .safetensors file found — skipping inference")
+        return False
+
+    lora_path = safetensors_files[-1]
+    lora_name = lora_path.stem  # filename without extension
+
+    # Create sample_images output directory
+    sample_dir = output_dir / "sample_images"
+    sample_dir.mkdir(exist_ok=True)
+
+    # Build lora prompt: <lora:filename:1> test_prompt
+    lora_prompt = f"<lora:{lora_name}:1> {test_prompt}"
+
+    # Anima-specific inference settings (per Civitai developer docs + kohya-ss defaults):
+    #   cfg-scale 3-5 (sweet spot 4), steps 25-35 (default 30), euler sampler, simple schedule
+    NEGATIVE_PROMPT = "worst quality, low quality, blurry, bad anatomy, deformed hands"
+
+    cmd = [
+        "sd-cli",
+        "--model", diffusion_model or _INFERENCE_MODELS["diffusion_model"],
+        "--vae", vae_model or _INFERENCE_MODELS["vae"],
+        "--llm", llm_model or _INFERENCE_MODELS["text_encoder"],
+        "--lora-model-dir", str(output_dir),
+        "--prompt", lora_prompt,
+        "--negative-prompt", NEGATIVE_PROMPT,
+        "--cfg-scale", "4.0",
+        "--sampling-method", "euler",
+        "--scheduler", "simple",
+        "--steps", "30",
+        "--diffusion-fa",
+        "--offload-to-cpu",
+        "-s", str(seed),
+        "-o", str(sample_dir),
+    ]
+
+    logger.info(f"Running inference: sd-cli ... (prompt: {lora_prompt[:80]}...)")
+
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=_project_root,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        if result.returncode != 0:
+            stderr_preview = (result.stderr or result.stdout or "no output")[:200]
+            logger.warning(f"sd-cli inference failed (exit {result.returncode}): {stderr_preview}")
+            return False
+
+        # Check that at least one image was produced
+        images = list(sample_dir.glob("*.png")) + list(sample_dir.glob("*.jpg")) + list(sample_dir.glob("*.webp"))
+        if images:
+            logger.info(f"Inference complete: {len(images)} image(s) in sample_images/")
+            return True
+        else:
+            logger.warning("sd-cli exited successfully but produced no images")
+            return False
+
+    except FileNotFoundError:
+        logger.warning("sd-cli not found — skipping inference (install with: pip install sd-cli or similar)")
+        return False
+    except Exception as e:
+        logger.warning(f"Inference failed with exception: {e}")
+        return False
 
 
 def run_training(params: dict) -> dict:
@@ -287,6 +395,15 @@ def run_training(params: dict) -> dict:
 
         # Final manifest write
         _parse_and_write_progress(progress, manifest_path)
+
+        # Run inference with test prompt (if training succeeded and prompt provided)
+        test_prompt = params.get("test_prompt")
+        if progress.status == "completed" and test_prompt:
+            run_inference(
+                output_dir=output_dir,
+                test_prompt=test_prompt,
+                seed=params.get("test_seed", 42),
+            )
 
         return {
             "status": progress.status,

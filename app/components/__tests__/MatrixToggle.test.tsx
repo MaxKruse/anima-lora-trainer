@@ -34,7 +34,7 @@ describe('MatrixToggle', () => {
     fireEvent.click(toggle);
 
     await waitFor(() => {
-      expect(mockOnChange).toHaveBeenCalledWith('matrix', undefined);
+      expect(mockOnChange).toHaveBeenCalledWith('matrix');
     });
   });
 

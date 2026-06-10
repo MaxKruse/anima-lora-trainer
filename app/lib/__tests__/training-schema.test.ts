@@ -137,16 +137,16 @@ describe('trainingSchema', () => {
 
   it('accepts valid resolution values', async () => {
     const schema = await importSchema();
-    for (const res of [256, 512, 768, 1024, 2048]) {
+    for (const res of [768, 800, 960, 1024]) {
       const result = schema.safeParse({ ...validParams, resolution: res });
       expect(result.success, `Resolution ${res} should be valid`).toBe(true);
       if (result.success) expect(result.data.resolution).toBe(res);
     }
   });
 
-  it('rejects resolution below 256', async () => {
+  it('rejects resolution below 768', async () => {
     const schema = await importSchema();
-    const result = schema.safeParse({ ...validParams, resolution: 128 });
+    const result = schema.safeParse({ ...validParams, resolution: 512 });
     expect(result.success).toBe(false);
   });
 

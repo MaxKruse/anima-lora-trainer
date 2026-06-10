@@ -2,6 +2,14 @@
 
 from pathlib import Path
 
+# Anima-specific inference defaults (per Civitai developer docs + kohya-ss):
+#   cfg-scale 3-5 (sweet spot 4), steps 25-35 (default 30), euler sampler, simple schedule
+ANIMA_CFG_SCALE = "4.0"
+ANIMA_STEPS = "30"
+ANIMA_SAMPLER = "euler"
+ANIMA_SCHEDULER = "simple"
+ANIMA_NEGATIVE_PROMPT = "worst quality, low quality, blurry, bad anatomy, deformed hands"
+
 
 def build_sdcli_command(
     diffusion_model: str,
@@ -11,6 +19,7 @@ def build_sdcli_command(
     prompt: str,
     seed: int,
     output_path: str,
+    negative_prompt: str = ANIMA_NEGATIVE_PROMPT,
 ) -> str:
     """Assemble a shell command string for ``sd-cli`` inference with a LoRA.
 
@@ -30,9 +39,11 @@ def build_sdcli_command(
         "--llm", llm_model,
         "--lora-model-dir", lora_dir,
         "--prompt", lora_prompt,
-        "--cfg-scale", "6.0",
-        "--sampling-method", "euler",
-        "--steps", "20",
+        "--negative-prompt", negative_prompt,
+        "--cfg-scale", ANIMA_CFG_SCALE,
+        "--sampling-method", ANIMA_SAMPLER,
+        "--scheduler", ANIMA_SCHEDULER,
+        "--steps", ANIMA_STEPS,
         "--diffusion-fa",
         "--offload-to-cpu",
         "-s", str(seed),

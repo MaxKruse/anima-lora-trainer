@@ -137,10 +137,12 @@ describe('AnimaTab - Matrix Mode', () => {
 
   it('submitting in matrix mode sends paramRanges', async () => {
     const user = userEvent.setup();
+    const mockOnMatrixSubmit = vi.fn();
     const AnimaTab = await importAnimaTab();
     render(
       <AnimaTab
         onSubmit={mockOnSubmit}
+        onMatrixSubmit={mockOnMatrixSubmit}
         matrixMode={true}
         trainingImagesPath="/test/images"
       />
@@ -154,30 +156,6 @@ describe('AnimaTab - Matrix Mode', () => {
     const nameInput = screen.getByLabelText(/lora name/i);
     await user.type(nameInput, 'matrix-test-lora');
 
-    // Add a value to one of the multi-select fields (epochs)
-    const multiSelectInputs = screen.getAllByPlaceholderText(/type to add/i);
-    // Find the epochs multi-select
-    const epochsInput = multiSelectInputs.find(input => {
-      const label = input.previousElementSibling;
-      return label && label.textContent?.toLowerCase().includes('epochs');
-    });
-
-    if (epochsInput) {
-      await user.click(epochsInput);
-      await user.type(epochsInput, '10{enter}');
-    }
-
-    // Add a value to network dim
-    const networkDimInput = multiSelectInputs.find(input => {
-      const label = input.previousElementSibling;
-      return label && label.textContent?.toLowerCase().includes('network dim');
-    });
-
-    if (networkDimInput) {
-      await user.click(networkDimInput);
-      await user.type(networkDimInput, '32{enter}');
-    }
-
     // Submit
     const submitBtn = screen.getByRole('button', { name: /train/i })
       || screen.getByRole('button', { name: /start/i })
@@ -185,8 +163,14 @@ describe('AnimaTab - Matrix Mode', () => {
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(mockOnSubmit).toHaveBeenCalled();
+      expect(mockOnMatrixSubmit).toHaveBeenCalled();
     });
+
+    const [paramRanges, baseParams] = mockOnMatrixSubmit.mock.calls[0];
+    expect(paramRanges).toHaveProperty('networkDim');
+    expect(paramRanges).toHaveProperty('epochs');
+    expect(baseParams).toHaveProperty('trainingImages', '/test/images');
+    expect(baseParams).toHaveProperty('loraName', 'matrix-test-lora');
   });
 
   it('defaults to AdamW8Bit in matrix mode', async () => {
@@ -207,7 +191,7 @@ describe('AnimaTab - Matrix Mode', () => {
     expect(adamTags.length).toBeGreaterThan(0);
   });
 
-  it('defaults to cosine scheduler in matrix mode', async () => {
+  it('defaults to constant scheduler in matrix mode', async () => {
     const AnimaTab = await importAnimaTab();
     render(
       <AnimaTab
@@ -220,8 +204,8 @@ describe('AnimaTab - Matrix Mode', () => {
       expect(screen.getByText(/Anima Training Parameters/i)).toBeInTheDocument();
     });
 
-    // Should show cosine as a selected tag
-    const cosineTags = screen.getAllByText('cosine');
-    expect(cosineTags.length).toBeGreaterThan(0);
+    // Should show constant as a selected tag
+    const constantTags = screen.getAllByText('constant');
+    expect(constantTags.length).toBeGreaterThan(0);
   });
 });

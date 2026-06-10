@@ -36,8 +36,10 @@ vi.mock('os', () => ({
 vi.mock('path', () => ({
   default: {
     join: (...args: string[]) => args.join('/'),
+    basename: (path: string) => path.split('/').pop() || path,
   },
   join: (...args: string[]) => args.join('/'),
+  basename: (path: string) => path.split('/').pop() || path,
 }));
 
 async function importDownloader() {
@@ -103,9 +105,13 @@ describe('downloadModel', () => {
     const cmd = callArgs[0] as string;
     const args = callArgs[1] as string[];
 
-    expect(cmd).toBe('python');
-    expect(args).toContain('circlestone-labs/Anima');
-    expect(args).toContain('split_files/diffusion_models/anima-base-v1.0.safetensors');
+    expect(cmd).toBe('uv');
+    expect(args).toContain('run');
+    expect(args).toContain('python');
+    // The URL and dest path are passed as args to the Python script
+    const urlArg = args.find((a: string) => a.startsWith('https://'));
+    expect(urlArg).toContain('circlestone-labs/Anima');
+    expect(urlArg).toContain('split_files/diffusion_models/anima-base-v1.0.safetensors');
   });
 
   it('reports progress from Python stdout JSON lines', async () => {
