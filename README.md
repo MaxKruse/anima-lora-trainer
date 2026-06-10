@@ -1,36 +1,81 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# LoRA Matrix Trainer
 
-## Getting Started
+Train Anima LoRA models with matrix-style hyperparameter sweeps and automatic test-prompt inference.
 
-First, run the development server:
+## Quick Start
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
+# Install Python dependencies
+uv sync
+
+# Start the web UI
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) to configure and launch training.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Training Modes
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Single Run
+Train one LoRA with fixed hyperparameters. The web UI validates params and launches training. After training completes, a test-prompt inference generates sample images in `sample_images/`.
 
-## Learn More
+### Matrix Run
+Define ranges for any parameter (network dim, learning rate, epochs, etc.) and train every permutation. A single test prompt is generated from your training data tags and reused across all runs — sample images are directly comparable.
 
-To learn more about Next.js, take a look at the following resources:
+## Ad-Hoc Batch Inference
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Run test-prompt inference on existing LoRA files without retraining:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+# Inference with a manual prompt:
+uv run python scripts/infer_batch.py --dir output/job-123 --prompt "masterpiece, 1girl, solo, red hair"
 
-## Deploy on Vercel
+# Auto-generate prompt from training data captions:
+uv run python scripts/infer_batch.py --dir output/ --training-images datasets/mari_setogaya/img
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+# Custom settings:
+uv run python scripts/infer_batch.py --dir output/ --prompt "masterpiece, 1girl" --seed 1234 --steps 40
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Scans the directory recursively for `.safetensors` files, runs `sd-cli` inference on each, and writes output to `sample_images/` alongside each LoRA.
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `--dir, -d` | Directory to scan for LoRAs (required) |
+| `--prompt, -p` | Test prompt (comma-separated tags) |
+| `--training-images, -t` | Training data dir (auto-generates prompt from .txt captions) |
+| `--seed, -s` | Random seed (default: 42) |
+| `--steps` | Inference steps (default: 30) |
+| `--cfg-scale` | CFG scale (default: 4.0) |
+| `--diffusion-model` | Path to diffusion model |
+| `--vae` | Path to VAE model |
+| `--llm` | Path to text encoder model |
+| `--dry-run` | List LoRAs without running inference |
+
+## Inference Settings
+
+Test-prompt inference uses Anima-optimized defaults:
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| Sampler | `euler` | Default for Flow models |
+| Scheduler | `simple` | Flow matching schedule |
+| CFG Scale | `4.0` | Sweet spot 3–5 for Anima (lower than SD's 7) |
+| Steps | `30` | Typical range 25–35 |
+| Negative Prompt | `worst quality, low quality, blurry, bad anatomy, deformed hands` | Recommended baseline |
+
+## Project Structure
+
+```
+scripts/
+  train_single.py       Single training run (dataset TOML → accelerate → inference)
+  matrix_trainer.py     Matrix training (permute → train each → inference)
+  infer_batch.py        Ad-hoc batch inference on existing LoRAs
+  prompt_generator.py   Generate test prompts from training tags
+  tag_extractor.py      Extract tags from .txt caption files
+  sdcli_builder.py      Build sd-cli inference commands
+  command_builder.py    Build accelerate/kooya-ss training commands
+  dataset_toml.py       Generate kohya-ss dataset config
+```
