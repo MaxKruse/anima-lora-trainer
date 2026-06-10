@@ -40,32 +40,33 @@ const DEFAULT_EPOCHS = ['1', '5', '10', '20', '50'];
 const DEFAULT_RESOLUTIONS = ['768', '1024'];
 
 const DEFAULT_PARAMS: Omit<TrainingParams, 'trainingImages' | 'loraName'> = {
-  networkDim: 32,
-  networkAlpha: 16,
+  networkDim: 8,
+  networkAlpha: 8,
   learningRate: 1e-4,
-  batchSize: 1,
+  batchSize: 4,
   epochs: 10,
   resolution: 1024,
   optimizer: 'AdamW8Bit',
-  scheduler: 'cosine',
+  scheduler: 'constant',
   mixedPrecision: 'bf16',
   timestepSampling: 'sigmoid',
   gradientCheckpointing: true,
   cacheLatents: true,
   cacheTextEncoder: false,
   captionTagDropoutRate: 0.05,
+  keepTokens: 1,
 };
 
 // Default matrix values (single value arrays for initial state)
 const DEFAULT_MATRIX_VALUES: Record<string, string[]> = {
-  networkDim: ['32'],
-  networkAlpha: ['16'],
+  networkDim: ['8'],
+  networkAlpha: ['8'],
   learningRate: ['0.0001'],
-  batchSize: ['1'],
+  batchSize: ['4'],
   epochs: ['10'],
   resolution: ['1024'],
   optimizer: ['AdamW8Bit'],
-  scheduler: ['cosine'],
+  scheduler: ['constant'],
   mixedPrecision: ['bf16'],
   timestepSampling: ['sigmoid'],
 };
@@ -219,12 +220,14 @@ export function AnimaTab({ onSubmit, onMatrixSubmit, onPermutationCountChange, t
         const baseParams = {
           trainingImages: isManagedExternally ? trainingImagesPath : params.trainingImages,
           loraName: params.loraName,
+          maxSteps: (params as Record<string, any>).maxSteps,
           mixedPrecision: params.mixedPrecision,
           timestepSampling: params.timestepSampling,
           gradientCheckpointing: params.gradientCheckpointing,
           cacheLatents: params.cacheLatents,
           cacheTextEncoder: params.cacheTextEncoder,
           captionTagDropoutRate: params.captionTagDropoutRate,
+          keepTokens: (params as Record<string, any>).keepTokens,
         };
 
         if (onMatrixSubmit) {
@@ -446,13 +449,15 @@ export function AnimaTab({ onSubmit, onMatrixSubmit, onPermutationCountChange, t
                   {renderMultiSelect('Learning Rate', 'learningRate', DEFAULT_LEARNING_RATES)}
                   {renderMultiSelect('Batch Size', 'batchSize', DEFAULT_BATCH_SIZES)}
                   {renderMultiSelect('Epochs', 'epochs', DEFAULT_EPOCHS)}
+                  {renderOptionalNumberInput('Max Steps (optional)', 'maxSteps', 1, 'If set, overrides epochs')}
+                  {renderOptionalNumberInput('Repeats per image (optional)', 'repeats', 1, 'Auto-calculated if empty')}
                 </>
               ) : (
                 <>
                   {renderNumberInput('Learning Rate', 'learningRate', 0, 0.0001)}
                   {renderNumberInput('Batch Size', 'batchSize', 1)}
                   {renderNumberInput('Epochs', 'epochs', 1)}
-                  {renderOptionalNumberInput('Max Steps (optional)', 'maxSteps', 1, 'Capped by epochs if empty')}
+                  {renderOptionalNumberInput('Max Steps (optional)', 'maxSteps', 1, 'If set, overrides epochs')}
                   {renderOptionalNumberInput('Repeats per image (optional)', 'repeats', 1, 'Auto-calculated if empty')}
                 </>
               )}
@@ -531,6 +536,25 @@ export function AnimaTab({ onSubmit, onMatrixSubmit, onPermutationCountChange, t
               Caption
             </h3>
             <div className="space-y-2">
+              <div>
+                <label htmlFor="keepTokens" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Keep Tokens
+                </label>
+                <input
+                  id="keepTokens"
+                  type="number"
+                  min={0}
+                  max={10}
+                  step={1}
+                  value={(params as Record<string, any>).keepTokens ?? 1}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    (params as Record<string, any>).keepTokens = isNaN(val) ? 1 : Math.min(10, Math.max(0, val));
+                    setParams({ ...params });
+                  }}
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md text-sm bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-500"
+                />
+              </div>
               <div>
                 <label htmlFor="captionTagDropoutRate" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Caption Tag Dropout Rate

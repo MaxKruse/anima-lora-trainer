@@ -36,6 +36,7 @@ export const trainingSchema = z.object({
 
   // Caption
   captionTagDropoutRate: z.number().min(0).max(1).default(0.05),
+  keepTokens: z.number().int().min(0).max(10).default(1),
 });
 
 export type TrainingParams = z.infer<typeof trainingSchema>;

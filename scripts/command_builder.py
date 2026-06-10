@@ -6,9 +6,9 @@ from typing import Any
 # Default model paths by model type
 MODEL_PATHS = {
     "anima": {
-        "diffusion_model": "models/anima/diffusion_models/anima-base-v1.0.safetensors",
-        "vae": "models/anima/vae/qwen_image_vae.safetensors",
-        "text_encoder": "models/anima/text_encoders/qwen_3_06b_base.safetensors",
+        "diffusion_model": "models/diffusion_model/anima-base-v1.0.safetensors",
+        "vae": "models/vae/qwen_image_vae.safetensors",
+        "text_encoder": "models/text_encoder/qwen_3_06b_base.safetensors",
         "train_script": "sd-scripts/anima_train_network.py",
         "network_module": "networks.lora_anima",
     },
@@ -51,7 +51,6 @@ def build_training_command(params: dict[str, Any]) -> list[str]:
         # Training
         f"--learning_rate={params['learning_rate']}",
         f"--train_batch_size={params['batch_size']}",
-        f"--max_train_epochs={params['epochs']}",
         f"--optimizer_type={params['optimizer']}",
         f"--lr_scheduler={params['scheduler']}",
         # Anima-specific
@@ -61,9 +60,18 @@ def build_training_command(params: dict[str, Any]) -> list[str]:
         f"--mixed_precision={params['mixed_precision']}",
     ]
 
-    # Optional: hard cap on total steps (overrides epochs)
+    # max_steps and epochs are mutually exclusive in kohya-ss:
+    # if max_train_epochs is set, it ALWAYS overwrites max_train_steps.
+    # So when the user specifies maxSteps, omit epochs entirely.
     if params.get("max_steps"):
         cmd.append(f"--max_train_steps={params['max_steps']}")
+        # Save checkpoints every 10% of total steps
+        save_interval = max(1, params["max_steps"] // 10)
+        cmd.append(f"--save_every_n_steps={save_interval}")
+    else:
+        cmd.append(f"--max_train_epochs={params['epochs']}")
+        # Save checkpoints every 10% of total epochs
+        cmd.append("--save_n_epoch_ratio=10")
 
     if params.get("gradient_checkpointing"):
         cmd.append("--gradient_checkpointing")
@@ -73,12 +81,13 @@ def build_training_command(params: dict[str, Any]) -> list[str]:
 
     if params.get("cache_text_encoder"):
         cmd.append("--cache_text_encoder_outputs")
+        # kohya-ss requires --network_train_unet_only when caching text encoder outputs
+        cmd.append("--network_train_unet_only")
 
     # VAE settings
     cmd.extend([
         "--vae_chunk_size=64",
         "--vae_disable_cache",
-        "--save_every_n_epochs=1",
     ])
 
     return cmd

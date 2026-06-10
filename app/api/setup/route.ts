@@ -258,8 +258,8 @@ async function runFullSetup(): Promise<void> {
       gpu: gpuInfo.gpuName,
       series: gpuInfo.series,
       cuda: gpuInfo.cuda,
-      computeCapability: gpuInfo.computeCapability,
-      pytorchCudaVersion,
+      computeCapability: gpuInfo.computeCapability || '',
+      pytorchCudaVersion: pytorchCudaVersion || undefined,
     });
     console.log('[setup] Full setup completed successfully');
   } catch (error: any) {

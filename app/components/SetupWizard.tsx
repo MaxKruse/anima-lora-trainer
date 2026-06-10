@@ -290,7 +290,7 @@ export function SetupWizard() {
                     )}
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400">{info.description}</p>
-                  {stepStatus.output && (stepStatus.status === 'done' || stepStatus.status === 'error') && (
+                  {('output' in stepStatus && stepStatus.output) && (stepStatus.status === 'done' || stepStatus.status === 'error') && (
                     <pre className="mt-1 text-xs text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded p-2 max-h-32 overflow-auto whitespace-pre-wrap [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-slate-400 dark:[&::-webkit-scrollbar-thumb]:bg-slate-500 [&::-webkit-scrollbar-thumb]:rounded-full">
                       {stepStatus.output}
                     </pre>

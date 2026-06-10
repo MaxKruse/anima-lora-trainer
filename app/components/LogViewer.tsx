@@ -13,6 +13,7 @@ interface LogViewerProps {
 export function LogViewer({ lines, autoScroll = true }: LogViewerProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
+  const userScrolledUpRef = useRef(false);
 
   // Filter lines by search term
   const filteredLines = useMemo(() => {
@@ -21,9 +22,22 @@ export function LogViewer({ lines, autoScroll = true }: LogViewerProps) {
     return lines.filter((line) => line.toLowerCase().includes(lower));
   }, [lines, searchTerm]);
 
-  // Auto-scroll to latest line
+  // Check if user is near the bottom of the scroll container
+  const isNearBottom = (el: HTMLDivElement): boolean => {
+    const threshold = 50; // px from bottom
+    return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+  };
+
+  // Track manual scroll position — if user scrolls up, stop auto-scrolling
+  const handleScroll = () => {
+    if (containerRef.current) {
+      userScrolledUpRef.current = !isNearBottom(containerRef.current);
+    }
+  };
+
+  // Auto-scroll to latest line only when user hasn't scrolled up
   useEffect(() => {
-    if (autoScroll && containerRef.current) {
+    if (autoScroll && containerRef.current && !userScrolledUpRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
   }, [filteredLines.length, autoScroll]);
@@ -60,6 +74,7 @@ export function LogViewer({ lines, autoScroll = true }: LogViewerProps) {
       <div
         ref={containerRef}
         role="log"
+        onScroll={handleScroll}
         className="h-96 overflow-y-auto p-3 font-mono text-xs bg-slate-50 dark:bg-slate-900"
         data-auto-scroll={autoScroll ? 'true' : 'false'}
       >

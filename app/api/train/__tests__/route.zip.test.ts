@@ -40,6 +40,12 @@ vi.mock('fs', () => ({
   readdirSync: (...args: any[]) => mockReaddirSync(...args),
 }));
 
+// --- Mock os ---
+vi.mock('os', () => ({
+  default: { tmpdir: () => '/tmp' },
+  tmpdir: () => '/tmp',
+}));
+
 // --- Mock path ---
 vi.mock('path', () => ({
   default: {
@@ -117,7 +123,7 @@ describe('/api/train - training zip', () => {
     expect(zipCall).toBeDefined();
   });
 
-  it('includes zip path in job manifest', async () => {
+  it('passes output dir to training command', async () => {
     mockSpawn.mockReturnValue(createMockProcess(0));
 
     const route = await import('../route');
@@ -129,19 +135,20 @@ describe('/api/train - training zip', () => {
     // Wait for async launchTraining to complete
     await new Promise((r) => setTimeout(r, 100));
 
-    // Check that writeJobManifest was called with zipPath
+    // Check that writeFileSync was called to write params JSON
     expect(mockWriteFileSync).toHaveBeenCalled();
-    const manifestCall = mockWriteFileSync.mock.calls.find(
-      ([, data]: [string, string]) => {
-        try {
-          const parsed = JSON.parse(data);
-          return parsed.zipPath;
-        } catch {
-          return false;
-        }
+    const paramsCall = mockWriteFileSync.mock.calls.find(
+      ([filePath]: [string, string]) => {
+        return filePath.includes('train-params-');
       }
     );
-    expect(manifestCall).toBeDefined();
+    expect(paramsCall).toBeDefined();
+
+    // Verify the params include output_dir
+    const [, data] = paramsCall;
+    const parsed = JSON.parse(data);
+    expect(parsed.output_dir).toBeDefined();
+    expect(parsed.job_id).toBeDefined();
   });
 
   it('skips zip creation when source has no images', async () => {

@@ -26,7 +26,7 @@ function parseParamRange(valueStr: string): (number | string)[] {
     if (!isNaN(num) && isFinite(num)) return num;
 
     return trimmed;
-  }).filter(Boolean);
+  }).filter((v): v is string | number => v !== null);
 }
 
 /**
@@ -106,20 +106,32 @@ export async function POST(request: Request) {
         console.warn(`[matrix:${jobId}] zip creation skipped: ${err.message}`);
       }
     }
+
+    // Write JSON to temp files to avoid shell escaping issues on Windows
+    const paramRangesFile = path.join(outputDir, 'param_ranges.json');
+    const baseParamsFile = path.join(outputDir, 'base_params.json');
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(paramRangesFile, JSON.stringify(parsedRanges));
+    fs.writeFileSync(baseParamsFile, JSON.stringify(baseParams));
+
     const cmd = 'uv';
     const args = [
       'run',
       'python',
       path.join(PROJECT_ROOT, 'scripts', 'matrix_trainer.py'),
-      '--param-ranges',
-      JSON.stringify(parsedRanges),
-      '--base-params',
-      JSON.stringify(baseParams),
+      '--param-ranges-file',
+      paramRangesFile,
+      '--base-params-file',
+      baseParamsFile,
       '--output-dir',
       outputDir,
     ];
 
-    const proc = spawn(cmd, args, { shell: true, cwd: PROJECT_ROOT });
+    const proc = spawn(cmd, args, {
+      shell: true,
+      cwd: PROJECT_ROOT,
+      env: { ...process.env, PYTHONPATH: PROJECT_ROOT },
+    });
 
     store.updateStatus(jobId, 'running');
 

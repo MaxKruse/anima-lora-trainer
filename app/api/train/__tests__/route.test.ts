@@ -24,17 +24,35 @@ const mockExistsSync = vi.fn(() => false);
 const mockReadFileSync = vi.fn();
 const mockWriteFileSync = vi.fn();
 const mockMkdirSync = vi.fn();
+const mockRmSync = vi.fn();
+const mockUnlinkSync = vi.fn();
 vi.mock('fs', () => ({
   default: {
     existsSync: (...args: any[]) => mockExistsSync(...args),
     readFileSync: (...args: any[]) => mockReadFileSync(...args),
     writeFileSync: (...args: any[]) => mockWriteFileSync(...args),
     mkdirSync: (...args: any[]) => mockMkdirSync(...args),
+    rmSync: (...args: any[]) => mockRmSync(...args),
+    unlinkSync: (...args: any[]) => mockUnlinkSync(...args),
   },
   existsSync: (...args: any[]) => mockExistsSync(...args),
   readFileSync: (...args: any[]) => mockReadFileSync(...args),
   writeFileSync: (...args: any[]) => mockWriteFileSync(...args),
   mkdirSync: (...args: any[]) => mockMkdirSync(...args),
+  rmSync: (...args: any[]) => mockRmSync(...args),
+  unlinkSync: (...args: any[]) => mockUnlinkSync(...args),
+}));
+
+// --- Mock os ---
+vi.mock('os', () => ({
+  default: { tmpdir: () => '/tmp' },
+  tmpdir: () => '/tmp',
+}));
+
+// --- Mock training-zip ---
+// Path is relative to the route.ts file, not this test file
+vi.mock('../../../lib/training-zip', () => ({
+  createTrainingZip: vi.fn().mockResolvedValue(null),
 }));
 
 // --- Mock path ---

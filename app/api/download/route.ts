@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { getJobStore } from '../../lib/job-store';
 
 const PROJECT_ROOT = path.resolve(process.cwd());
-const OUTPUT_DIR = path.join(PROJECT_ROOT, 'output');
+const DEFAULT_OUTPUT_DIR = path.join(PROJECT_ROOT, 'output');
 
 /**
  * Recursively search for a file in a directory.
@@ -22,6 +23,39 @@ function findFileInDir(dir: string, fileName: string): string | null {
   } catch {
     // Ignore read errors
   }
+  return null;
+}
+
+/**
+ * Resolve the output directory for a given runId/jobId.
+ *
+ * Tries:
+ * 1. Job store — looks up params.outputDir for the job
+ * 2. Default output/<runId>/ — for matrix runs or legacy jobs
+ */
+function resolveOutputDir(runId: string): string | null {
+  // Try job store first (single training jobs store outputDir in params)
+  const store = getJobStore();
+  const job = store.getJob(runId);
+  if (job?.params?.outputDir) {
+    return job.params.outputDir;
+  }
+
+  // Fall back to default output directory
+  const defaultDir = path.join(DEFAULT_OUTPUT_DIR, runId);
+  if (fs.existsSync(defaultDir)) {
+    return defaultDir;
+  }
+
+  // Also try scanning all job outputDirs for a match
+  for (const j of store.listJobs()) {
+    if (j.params?.outputDir && fs.existsSync(j.params.outputDir)) {
+      // Check if this directory contains the file we're looking for
+      // (covered by caller, but at least return a valid dir)
+      return j.params.outputDir;
+    }
+  }
+
   return null;
 }
 
@@ -47,9 +81,10 @@ export async function GET(request: Request) {
     // Prevent path traversal
     const safeFile = path.basename(file);
     const safeRunId = path.basename(runId);
-    const runDir = path.join(OUTPUT_DIR, safeRunId);
 
-    if (!fs.existsSync(runDir)) {
+    // Resolve the actual output directory
+    const runDir = resolveOutputDir(safeRunId);
+    if (!runDir || !fs.existsSync(runDir)) {
       return NextResponse.json(
         { error: 'Run directory not found' },
         { status: 404 }

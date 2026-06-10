@@ -16,7 +16,7 @@ class TestGenerateDatasetToml:
             batch_size=4,
             num_images=100,
             epochs=10,
-            steps_per_epoch=100,
+            num_repeats=1,
             output_path=str(output_path),
         )
 
@@ -32,22 +32,21 @@ class TestGenerateDatasetToml:
         # Check datasets section
         assert "datasets" in data
         dataset = data["datasets"][0]
-        assert dataset["resolution"] == 512
+        assert dataset["resolution"] == 1024
         assert dataset["batch_size"] == 4
 
         # Check subsets
         subset = dataset["subsets"][0]
         assert subset["image_dir"] == "/path/to/images"
 
-    def test_num_repeats_calculated_correctly(self, tmp_path):
+    def test_num_repeats_passed_through(self, tmp_path):
         output_path = tmp_path / "dataset.toml"
-        # 10 images, 100 steps per epoch → ceil(100/10) = 10 repeats
         generate_dataset_toml(
             image_dir="/images",
             batch_size=1,
             num_images=10,
             epochs=5,
-            steps_per_epoch=100,
+            num_repeats=10,
             output_path=str(output_path),
         )
 
@@ -56,21 +55,21 @@ class TestGenerateDatasetToml:
         assert subset["num_repeats"] == 10
 
     def test_num_repeats_with_remainder(self, tmp_path):
-        """When num_images doesn't divide evenly, ceil up."""
+        """When num_images doesn't divide evenly, repeats are set directly."""
         output_path = tmp_path / "dataset.toml"
-        # 7 images, 100 steps → ceil(100/7) = 15 repeats
+        # 7 images, 15 repeats
         generate_dataset_toml(
             image_dir="/images",
             batch_size=1,
             num_images=7,
             epochs=1,
-            steps_per_epoch=100,
+            num_repeats=15,
             output_path=str(output_path),
         )
 
         data = toml.load(str(output_path))
         subset = data["datasets"][0]["subsets"][0]
-        assert subset["num_repeats"] == 15  # ceil(100/7) = 14.286 → 15
+        assert subset["num_repeats"] == 15
 
     def test_sets_caption_extension_txt(self, tmp_path):
         output_path = tmp_path / "dataset.toml"
@@ -79,7 +78,7 @@ class TestGenerateDatasetToml:
             batch_size=1,
             num_images=50,
             epochs=10,
-            steps_per_epoch=50,
+            num_repeats=1,
             output_path=str(output_path),
         )
 
@@ -93,7 +92,7 @@ class TestGenerateDatasetToml:
             batch_size=1,
             num_images=50,
             epochs=10,
-            steps_per_epoch=50,
+            num_repeats=1,
             output_path=str(output_path),
         )
 
@@ -107,7 +106,7 @@ class TestGenerateDatasetToml:
             batch_size=2,
             num_images=20,
             epochs=5,
-            steps_per_epoch=20,
+            num_repeats=1,
             output_path=str(custom_path),
         )
 
@@ -120,10 +119,39 @@ class TestGenerateDatasetToml:
             batch_size=1,
             num_images=50,
             epochs=10,
-            steps_per_epoch=50,
+            num_repeats=1,
             resolution=1024,
             output_path=str(output_path),
         )
 
         data = toml.load(str(output_path))
         assert data["datasets"][0]["resolution"] == 1024
+
+    def test_custom_keep_tokens(self, tmp_path):
+        output_path = tmp_path / "dataset.toml"
+        generate_dataset_toml(
+            image_dir="/images",
+            batch_size=1,
+            num_images=50,
+            epochs=10,
+            num_repeats=1,
+            keep_tokens=2,
+            output_path=str(output_path),
+        )
+
+        data = toml.load(str(output_path))
+        assert data["general"]["keep_tokens"] == 2
+
+    def test_default_keep_tokens_is_one(self, tmp_path):
+        output_path = tmp_path / "dataset.toml"
+        generate_dataset_toml(
+            image_dir="/images",
+            batch_size=1,
+            num_images=50,
+            epochs=10,
+            num_repeats=1,
+            output_path=str(output_path),
+        )
+
+        data = toml.load(str(output_path))
+        assert data["general"]["keep_tokens"] == 1

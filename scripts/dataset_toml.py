@@ -14,6 +14,7 @@ def generate_dataset_toml(
     resolution: int = 1024,
     cache_text_encoder_outputs: bool = False,
     caption_tag_dropout_rate: float = 0.05,
+    keep_tokens: int = 1,
 ) -> str:
     """Generate a .toml dataset config for training.
 
@@ -65,7 +66,7 @@ def generate_dataset_toml(
         "general": {
             "shuffle_caption": shuffle_caption,
             "caption_extension": ".txt",
-            "keep_tokens": 1,
+            "keep_tokens": keep_tokens,
             "token_warmup_step": token_warmup_step,
             "caption_tag_dropout_rate": effective_dropout,
         },
