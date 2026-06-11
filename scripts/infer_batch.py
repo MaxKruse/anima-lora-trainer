@@ -5,11 +5,16 @@ Usage examples:
   # Run inference on all .safetensors files under a folder:
   uv run python scripts/infer_batch.py --dir output/job-123 --prompt "masterpiece, 1girl, solo"
 
-  # Auto-generate prompt from training data tags:
+  # Auto-generate prompt from training data tags (detects trigger word automatically):
   uv run python scripts/infer_batch.py --dir output/ --training-images datasets/mari/img
 
   # Custom settings:
   uv run python scripts/infer_batch.py --dir output/ --prompt "masterpiece, 1girl" --seed 1234 --steps 40
+
+For each LoRA, generates 3 preview images at different aspect ratios:
+  - 768x1280 (portrait)
+  - 1280x1280 (square)
+  - 1280x768 (landscape)
 """
 
 import argparse
@@ -43,6 +48,16 @@ _DEFAULT_STEPS = "30"
 _DEFAULT_SAMPLER = "euler"
 _DEFAULT_SCHEDULER = "simple"
 
+# Preview resolutions: (width, height)
+PREVIEW_RESOLUTIONS = [
+    (768, 1280),   # portrait
+    (1280, 1280),  # square
+    (1280, 768),   # landscape
+]
+
+# Tags to exclude when detecting the dataset trigger word
+_TRIGGER_EXCLUSIONS = {"1girl", "solo"}
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
@@ -56,7 +71,46 @@ def find_loras(directory: str) -> list[Path]:
     return sorted(Path(directory).rglob("*.safetensors"))
 
 
-def run_inference_for_lora(
+def find_trigger_word(directory: str) -> str | None:
+    """Find the tag that appears in every caption file (the dataset trigger word).
+
+    Excludes common generic tags like '1girl' and 'solo'.
+    Returns None if no trigger word can be determined.
+    """
+    txt_files = sorted(Path(directory).glob("*.txt"))
+    if not txt_files:
+        return None
+
+    # Build per-file tag sets
+    all_file_tags: list[set[str]] = []
+    for f in txt_files:
+        content = f.read_text(encoding="utf-8", errors="replace").strip()
+        if not content:
+            continue
+        tags = {t.strip().lower() for t in content.split(",") if t.strip()}
+        all_file_tags.append(tags)
+
+    if len(all_file_tags) < 2:
+        return None
+
+    # Intersection of all caption tag sets
+    common = all_file_tags[0]
+    for tags in all_file_tags[1:]:
+        common = common & tags
+
+    # Filter out generic tags
+    trigger = common - _TRIGGER_EXCLUSIONS
+
+    if len(trigger) == 1:
+        return trigger.pop()
+    elif len(trigger) > 1:
+        # Multiple candidates — pick the longest (most specific)
+        return sorted(trigger, key=len, reverse=True)[0]
+
+    return None
+
+
+def run_inference(
     lora_path: Path,
     prompt: str,
     diffusion_model: str,
@@ -65,22 +119,24 @@ def run_inference_for_lora(
     seed: int,
     steps: int,
     cfg_scale: str,
-) -> bool:
-    """Run sd-cli inference for a single LoRA file.
+    width: int,
+    height: int,
+) -> Path | None:
+    """Run sd-cli inference for a single LoRA at a specific resolution.
 
-    Creates sample_images/ in the LoRA's parent directory.
-    Returns True if inference succeeded and produced an image.
+    Returns the output file path on success, or None on failure.
     """
-    lora_name = lora_path.stem  # filename without extension
-    lora_dir = lora_path.parent
+    lora_name = lora_path.stem
+    lora_dir = lora_path.parent.resolve()
     sample_dir = lora_dir / "sample_images"
     sample_dir.mkdir(exist_ok=True)
+    output_path = sample_dir / f"{lora_name}_{width}x{height}.png"
 
     lora_prompt = f"<lora:{lora_name}:1> {prompt}"
 
     cmd = [
         "sd-cli",
-        "--model", diffusion_model,
+        "--diffusion-model", diffusion_model,
         "--vae", vae_model,
         "--llm", llm_model,
         "--lora-model-dir", str(lora_dir),
@@ -93,7 +149,9 @@ def run_inference_for_lora(
         "--diffusion-fa",
         "--offload-to-cpu",
         "-s", str(seed),
-        "-o", str(sample_dir),
+        "-W", str(width),
+        "-H", str(height),
+        "-o", str(output_path),
     ]
 
     env = os.environ.copy()
@@ -111,27 +169,21 @@ def run_inference_for_lora(
 
         if result.returncode != 0:
             stderr_preview = (result.stderr or result.stdout or "no output")[:200]
-            logger.warning(f"Inference failed (exit {result.returncode}): {stderr_preview}")
-            return False
+            logger.warning(f"  Inference failed (exit {result.returncode}): {stderr_preview}")
+            return None
 
-        # Check that at least one image was produced
-        images = (
-            list(sample_dir.glob("*.png"))
-            + list(sample_dir.glob("*.jpg"))
-            + list(sample_dir.glob("*.webp"))
-        )
-        if images:
-            return True
+        if output_path.exists():
+            return output_path
         else:
-            logger.warning("sd-cli exited OK but produced no images")
-            return False
+            logger.warning(f"  sd-cli exited OK but output file not found: {output_path}")
+            return None
 
     except FileNotFoundError:
         logger.error("sd-cli not found — install it first")
-        return False
+        return None
     except Exception as e:
         logger.error(f"Inference failed: {e}")
-        return False
+        return None
 
 
 def main():
@@ -153,7 +205,7 @@ def main():
     parser.add_argument(
         "--training-images", "-t",
         default=None,
-        help="Directory with training images + .txt captions (used to auto-generate prompt if --prompt not given)",
+        help="Directory with training images + .txt captions (used to auto-generate prompt and detect trigger word)",
     )
     parser.add_argument(
         "--seed", "-s",
@@ -194,6 +246,13 @@ def main():
     )
     args = parser.parse_args()
 
+    # Detect trigger word from training data
+    trigger_word = None
+    if args.training_images:
+        trigger_word = find_trigger_word(args.training_images)
+        if trigger_word:
+            logger.info(f"Detected trigger word: {trigger_word}")
+
     # Resolve prompt
     prompt = args.prompt
     if not prompt and args.training_images:
@@ -203,6 +262,15 @@ def main():
     elif not prompt:
         prompt = "masterpiece"
         logger.info("No prompt or training images — using default: masterpiece")
+
+    # Build final prompt: masterpiece, <trigger>, <tags>
+    if trigger_word:
+        # Strip leading "masterpiece" if present, then reassemble
+        tag_body = prompt.removeprefix("masterpiece, ").removeprefix("masterpiece").strip()
+        if tag_body.startswith(", "):
+            tag_body = tag_body[2:]
+        prompt = f"masterpiece, {trigger_word}, {tag_body}"
+        logger.info(f"Full prompt (with trigger): {prompt}")
 
     # Find LoRAs
     loras = find_loras(args.dir)
@@ -217,30 +285,36 @@ def main():
             print(lora)
         return
 
-    # Run inference
-    total = len(loras)
+    # Run inference at all resolutions
+    total = len(loras) * len(PREVIEW_RESOLUTIONS)
     success = 0
     failed = 0
     start_time = time.time()
 
-    for idx, lora in enumerate(loras, 1):
-        logger.info(f"[{idx}/{total}] {lora.name}")
-        ok = run_inference_for_lora(
-            lora_path=lora,
-            prompt=prompt,
-            diffusion_model=args.diffusion_model,
-            vae_model=args.vae,
-            llm_model=args.llm,
-            seed=args.seed,
-            steps=args.steps,
-            cfg_scale=args.cfg_scale,
-        )
-        if ok:
-            success += 1
-            logger.info(f"  OK — sample_images/")
-        else:
-            failed += 1
-            logger.warning(f"  FAILED")
+    for lora_idx, lora in enumerate(loras, 1):
+        logger.info(f"[{lora_idx}/{len(loras)}] {lora.name}")
+        logger.info(f"  prompt: <lora:{lora.stem}:1> {prompt}")
+
+        for res_idx, (width, height) in enumerate(PREVIEW_RESOLUTIONS, 1):
+            logger.info(f"  [{res_idx}/{len(PREVIEW_RESOLUTIONS)}] {width}x{height}")
+            output = run_inference(
+                lora_path=lora,
+                prompt=prompt,
+                diffusion_model=args.diffusion_model,
+                vae_model=args.vae,
+                llm_model=args.llm,
+                seed=args.seed,
+                steps=args.steps,
+                cfg_scale=args.cfg_scale,
+                width=width,
+                height=height,
+            )
+            if output:
+                success += 1
+                logger.info(f"    OK — {output.name}")
+            else:
+                failed += 1
+                logger.warning(f"    FAILED")
 
     elapsed = round(time.time() - start_time, 1)
     logger.info(f"Done: {success} succeeded, {failed} failed out of {total} ({elapsed}s)")

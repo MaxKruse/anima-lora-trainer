@@ -1,16 +1,20 @@
 """Zip training images and captions into a single archive.
 
+Preserves folder structure (subdirectories for outfits, variations, etc.)
+so the archive mirrors the original dataset layout.
+
 Usage:
     python zip_training_data.py <source_dir> <output_dir>
 
 Creates <output_dir>/training-data.zip containing all image and
-caption files from <source_dir>.
+caption files from <source_dir>, preserving subdirectory structure.
 """
 
 import argparse
 import os
 import sys
 import zipfile
+from pathlib import Path
 
 
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif'}
@@ -19,47 +23,60 @@ IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif'}
 def zip_training_data(source_dir: str, output_dir: str) -> str | None:
     """Zip all images and their caption files from source_dir.
 
+    Preserves subdirectory structure. For example:
+        source_dir/
+          base/
+            img1.jpg, img1.txt
+          outfit1/
+            img2.jpg, img2.txt
+    becomes:
+        training-data.zip/
+          base/
+            img1.jpg, img1.txt
+          outfit1/
+            img2.jpg, img2.txt
+
     Returns the path to the created zip file, or None if no files found.
     """
-    if not os.path.isdir(source_dir):
+    src = Path(source_dir).resolve()
+    if not src.is_dir():
         raise FileNotFoundError(f"Source directory not found: {source_dir}")
 
-    # Collect all files
-    files = sorted(os.listdir(source_dir))
-    image_files = [
-        f for f in files
-        if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS
-    ]
+    # Collect all image and caption files, preserving relative paths
+    files_to_add: list[tuple[Path, str]] = []  # (absolute_path, archive_arcname)
 
-    if not image_files:
-        print("No image files found in source directory", file=sys.stderr)
+    for root, dirs, files in os.walk(src):
+        root_path = Path(root)
+        for filename in sorted(files):
+            filepath = root_path / filename
+            suffix = filepath.suffix.lower()
+
+            # Include images and .txt caption files
+            if suffix in IMAGE_EXTENSIONS or suffix == '.txt':
+                # Relative path from source_dir becomes the archive path
+                rel_path = filepath.relative_to(src)
+                # Use forward slashes for cross-platform zip compatibility
+                arcname = str(rel_path).replace(os.sep, '/')
+                files_to_add.append((filepath, arcname))
+
+    if not files_to_add:
+        print("No image or caption files found in source directory", file=sys.stderr)
         return None
-
-    # Also include caption files (.txt) that match image names
-    image_bases = {os.path.splitext(f)[0] for f in image_files}
-    caption_files = [
-        f for f in files
-        if f.lower().endswith('.txt') and os.path.splitext(f)[0] in image_bases
-    ]
-
-    all_files = sorted(set(image_files) | set(caption_files))
 
     os.makedirs(output_dir, exist_ok=True)
     zip_path = os.path.join(output_dir, 'training-data.zip')
 
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for filename in all_files:
-            filepath = os.path.join(source_dir, filename)
-            if os.path.isfile(filepath):
-                zf.write(filepath, filename)
-                print(f"  added: {filename}")
+        for filepath, arcname in files_to_add:
+            zf.write(filepath, arcname)
+            print(f"  added: {arcname}")
 
-    print(f"Created {zip_path} with {len(all_files)} files")
+    print(f"Created {zip_path} with {len(files_to_add)} files")
     return zip_path
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Zip training data')
+    parser = argparse.ArgumentParser(description='Zip training data (preserves folder structure)')
     parser.add_argument('source_dir', help='Directory containing training images')
     parser.add_argument('output_dir', help='Directory for the output zip file')
     args = parser.parse_args()

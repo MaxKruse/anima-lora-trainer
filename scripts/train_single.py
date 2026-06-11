@@ -30,7 +30,7 @@ def check_cancel_signal(job_id: str) -> bool:
     return signal_path.exists()
 
 from scripts.command_builder import build_training_command
-from scripts.dataset_toml import generate_dataset_toml
+from scripts.dataset_toml import generate_dataset_toml, discover_subsets
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -114,15 +114,15 @@ class TrainingProgress:
 
 
 def _count_images(image_dir: str) -> int:
-    """Count image files in a directory."""
+    """Count ALL image files recursively under a directory."""
     image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
-    count = 0
-    try:
-        for entry in os.listdir(image_dir):
-            if Path(entry).suffix.lower() in image_extensions:
-                count += 1
-    except FileNotFoundError:
-        pass
+    root = Path(image_dir)
+    if not root.exists():
+        return 1
+    count = sum(
+        1 for p in root.rglob("*")
+        if p.is_file() and p.suffix.lower() in image_extensions
+    )
     return max(count, 1)
 
 
@@ -274,19 +274,30 @@ def run_training(params: dict) -> dict:
     try:
         # Step 1: Generate dataset TOML
         dataset_toml_path = output_dir / "dataset.toml"
-        num_images = _count_images(params["training_images"])
+
+        # Discover all image folders (root + subdirectories)
+        subsets = discover_subsets(params["training_images"])
+        if not subsets:
+            # Fallback: treat root as single subset
+            subsets = [{"image_dir": params["training_images"], "num_images": 1}]
+
+        total_images = sum(s["num_images"] for s in subsets)
 
         user_repeats = params.get("repeats")
         if user_repeats is not None:
             num_repeats = user_repeats
         else:
-            steps_per_epoch = max(100, num_images)
-            num_repeats = max(1, -(-steps_per_epoch // num_images))
+            steps_per_epoch = max(100, total_images)
+            num_repeats = max(1, -(-steps_per_epoch // total_images))
+
+        subset_configs = [
+            {"image_dir": s["image_dir"], "num_repeats": num_repeats}
+            for s in subsets
+        ]
 
         generate_dataset_toml(
-            image_dir=params["training_images"],
             batch_size=params["batch_size"],
-            num_images=num_images,
+            num_images=total_images,
             epochs=params["epochs"],
             num_repeats=num_repeats,
             output_path=str(dataset_toml_path),
@@ -294,8 +305,9 @@ def run_training(params: dict) -> dict:
             cache_text_encoder_outputs=params.get("cache_text_encoder", False),
             caption_tag_dropout_rate=params.get("caption_tag_dropout_rate", 0.05),
             keep_tokens=params.get("keep_tokens", 1),
+            subsets=subset_configs,
         )
-        logger.info(f"Dataset TOML written to {dataset_toml_path}")
+        logger.info(f"Dataset TOML written to {dataset_toml_path} ({len(subsets)} subset(s), {total_images} images)")
 
         # Step 2: Build training command
         params["dataset_config"] = str(dataset_toml_path)

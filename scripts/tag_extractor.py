@@ -1,13 +1,13 @@
 """Extract unique tags from .txt caption files in a directory."""
 
-import os
 from pathlib import Path
 
 
 def extract_tags(directory: str) -> list[str]:
     """Read all .txt files in *directory* and return a sorted list of unique tags.
 
-    Tags are split on commas or whitespace.  Empty captions are ignored.
+    Tags are comma-separated (e.g. "1girl, red hair, large breasts").
+    Empty captions are ignored.
     """
     tags: set[str] = set()
 
@@ -16,9 +16,8 @@ def extract_tags(directory: str) -> list[str]:
         if not content:
             continue
 
-        # Replace commas with spaces, then split on whitespace
-        normalized = content.replace(",", " ")
-        for tag in normalized.split():
+        # Tags are comma-separated (e.g., "1girl, red hair, large breasts")
+        for tag in content.split(","):
             tag = tag.strip().lower()
             if tag:
                 tags.add(tag)
