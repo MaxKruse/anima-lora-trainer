@@ -69,9 +69,7 @@ def zip_training_data(source_dir: str, output_dir: str) -> str | None:
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         for filepath, arcname in files_to_add:
             zf.write(filepath, arcname)
-            print(f"  added: {arcname}")
 
-    print(f"Created {zip_path} with {len(files_to_add)} files")
     return zip_path
 
 

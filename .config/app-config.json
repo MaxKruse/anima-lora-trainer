@@ -1,7 +1,0 @@
-{
-  "trainingImagesDir": "C:\\Dev\\lora-matrix-trainer\\datasets\\froot\\img",
-  "outputDir": "C:\\Dev\\lora-matrix-trainer\\datasets\\froot\\out",
-  "modelsDir": "C:\\Dev\\lora-matrix-trainer\\models",
-  "sdCliPath": "",
-  "sdScriptsPath": "C:\\Dev\\lora-matrix-trainer\\sd-scripts"
-}

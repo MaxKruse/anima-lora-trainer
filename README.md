@@ -18,11 +18,7 @@ uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Fr
 uv run .\scripts\train.py --mode matrix --dataset .\datasets\froot\img --name Froot --network-dim 16,20,32 --alpha 1,20
 ```
 
-**Validation is mandatory.** Training will refuse to start until you've run `--validate` on the dataset. Validation:
-- Creates the `out/` directory for training results
-- Checks image counts and caption coverage
-- Verifies per-folder image limits (warns if > 25 per subfolder)
-- Writes a `.validation.json` marker file
+**Validation is mandatory.** Training will refuse to start until you've run `--validate` on the dataset.
 
 ## Dataset Requirements
 
@@ -43,12 +39,12 @@ Subdirectories are scanned automatically. Each folder with images becomes a sepa
 
 ```
 datasets/character/img/
-  base/            ← base character images (14 images)
-  outfit1/         ← outfit variation 1 (3 images)
-  outfit2/         ← outfit variation 2 (2 images)
+  base/            ← base character images
+  outfit1/         ← outfit variation 1
+  outfit2/         ← outfit variation 2
 ```
 
-Each subdirectory gets its own `[[datasets.subsets]]` entry in the generated `dataset.toml`, so kohya-ss trains on all of them. The `--validate` flag shows the folder breakdown.
+Each subdirectory gets its own `[[datasets.subsets]]` entry in the generated `dataset.toml`.
 
 **Recommended:** 12–20 total images (across all folders) spanning different poses, outfits, and aspect ratios.
 
@@ -58,21 +54,13 @@ Each subdirectory gets its own `[[datasets.subsets]]` entry in the generated `da
 uv run .\scripts\train.py --validate --dataset .\datasets\froot\img
 ```
 
-**Must be run before any training.** Creates the output directory and writes a validation marker.
-
-Checks:
-- Image count per folder (warns if > 25 per subfolder)
-- Total image count (recommends 12–20, minimum 10)
-- Caption coverage (each image should have a matching .txt)
-- Calculates recommended `num_repeats` for your image count
-
-Warnings are non-blocking — training proceeds even with warnings. Only hard errors (missing directory, no images) prevent training.
+Checks image counts, caption coverage, and per-folder limits. Warnings are non-blocking — only hard errors (missing directory, no images, no captions) prevent training.
 
 ## Training Modes
 
 ### Single Run
 
-Train one LoRA with fixed parameters. All flags default to values from proven training runs (froot: 44 images, mari_setogaya: 14 images).
+Train one LoRA with fixed parameters. All flags default to values from proven training runs.
 
 ```bash
 uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Froot-Anima
@@ -80,13 +68,13 @@ uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Fr
 # custom params
 uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Froot-Anima --max-steps 500 --lr 0.0002 --bs 4 --network-dim 20 --alpha 1
 
-# bucket skew rebalance (training-time random-crop augmentation)
+# bucket skew rebalance (random-crop augmentation)
 uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Froot-Anima --rebalance-buckets
 ```
 
 ### Matrix Run
 
-Specify comma-separated values for any parameter — all permutations are trained sequentially with a shared test prompt for comparison.
+Specify comma-separated values for any parameter — all permutations are trained sequentially.
 
 ```bash
 uv run .\scripts\train.py --mode matrix --dataset .\datasets\froot\img --name Froot --network-dim 16,20,32 --alpha 1,16,20 --lr 0.0001,0.0002
@@ -121,7 +109,7 @@ echo > datasets/<name>/out/job-<timestamp>-<id>/cancel
 | Flag | Description |
 |------|-------------|
 | `--mode`, `-m` | `single` or `matrix` [default: `single`] |
-| `--validate`, `-v` | Validate dataset and exit |
+| `--validate` | Validate dataset and exit |
 
 ### Output
 
@@ -144,7 +132,7 @@ All accept comma-separated values in matrix mode.
 | `--optimizer` | AdamW8Bit | Optimizer type |
 | `--scheduler`, `-s` | cosine | LR scheduler |
 | `--resolution` | 1024 | Image resolution (768–1024) |
-| `--repeats`, `-r` | auto | Override num_repeats (auto-calculated from image count) |
+| `--repeats`, `-r` | auto | Override num_repeats (auto from image count) |
 | `--mixed-precision` | bf16 | fp16 / bf16 / no |
 | `--timestep-sampling` | sigmoid | sigma / uniform / sigmoid / shift / flux_shift |
 | `--caption-dropout` | 0.05 | Caption tag dropout rate (0.0–1.0) |
@@ -153,9 +141,9 @@ All accept comma-separated values in matrix mode.
 | `--no-cache-latents` | off | Disable latent caching |
 | `--cache-text-encoder` | off | Enable text encoder caching |
 | `--rebalance-buckets` | off | Detect dominant bucket skew and add random-crop augmented samples |
-| `--bucket-dominance-threshold` | 0.35 | Dominant bucket share threshold that triggers rebalance |
-| `--bucket-rebalance-max-aug` | 64 | Max augmented crops generated for rebalance |
-| `--bucket-rebalance-seed` | 42 | RNG seed used for rebalance crop generation |
+| `--bucket-dominance-threshold` | 0.20 | Dominant bucket share that triggers rebalance |
+| `--bucket-rebalance-max-aug` | 64 | Max augmented crops for rebalance |
+| `--bucket-rebalance-seed` | 42 | RNG seed for rebalance crop generation |
 
 ### Matrix
 
@@ -195,16 +183,20 @@ datasets/froot/out/job-1781162746594-khr542/
   training-data.zip         ← backup of training data
 ```
 
-Matrix runs create one top-level `manifest.json` and subdirectories per permutation under the job folder.
+Matrix runs create one top-level `manifest.json` and subdirectories per permutation.
 
 ## Project Structure
 
 ```
 scripts/
-  train.py                  ← unified CLI (single + matrix modes)
-  dataset_toml.py           ← generates kohya-ss dataset config
-  zip_training_data.py      ← creates training-data zip backups per run
-  infer_batch.py            ← ad-hoc batch inference on existing LoRAs
+  train.py                  ← CLI entry point + training runner
+  cli_args.py               ← argument parsing and param conversion
+  constants.py              ← defaults, model paths, validation limits
+  validation.py             ← dataset validation and marker management
+  bucket_rebalance.py       ← bucket skew detection and crop augmentation
+  dataset_toml.py           ← kohya-ss dataset config generation
+  zip_training_data.py      ← training data zip backups
+  infer_batch.py            ← batch inference on existing LoRAs
   prompt_generator.py       ← generate test prompts from tags
   tag_extractor.py          ← extract tags from .txt captions
   model_verify.py           ← verify/download model files
@@ -213,12 +205,13 @@ scripts/
 sd-scripts/                 ← kohya-ss/sd-scripts (training engine)
 models/                     ← downloaded base models
 datasets/                   ← training datasets
+tests/                      ← test suite
 ```
 
-## Notes On Current Wrapper Behavior
+## Implementation Notes
 
-- The wrapper runs training in-process by importing `anima_train_network.py` from `sd-scripts`.
-- A full kohya argument namespace is built from `anima_train_network.setup_parser()` defaults, then wrapper values are applied.
-- This keeps compatibility with upstream arguments while still providing a small user-facing CLI.
-- When `--rebalance-buckets` is enabled on an actual training run, the wrapper checks bucket distribution first.
-- If one bucket exceeds `--bucket-dominance-threshold`, random-crop augmentations are generated into the job output under `bucket-rebalance/` and included as an extra subset in `dataset.toml`.
+- Training runs in-process by importing `anima_train_network.py` from `sd-scripts`
+- A full kohya argument namespace is built from upstream defaults, then wrapper values override
+- `--validate` writes a `.validation.json` marker — training checks for this before starting
+- `--rebalance-buckets` detects when one aspect-ratio bucket dominates and redistributes via random-crop augmentation into adjacent buckets
+- Progress is tracked via `job_manifest.json` (single mode) or `manifest.json` (matrix mode)

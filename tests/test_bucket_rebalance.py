@@ -3,7 +3,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from scripts.train import assign_bucket_resolution, maybe_build_bucket_rebalance_subset, plan_bucket_rebalance
+from scripts.bucket_rebalance import (
+    assign_bucket_resolution,
+    maybe_build_bucket_rebalance_subset,
+    plan_bucket_rebalance,
+)
 
 
 def _write_image(path: Path, width: int, height: int) -> None:
@@ -132,21 +136,28 @@ def test_maybe_build_bucket_rebalance_subset_creates_augmented_data(tmp_path: Pa
     )
 
     assert subset is not None
-    assert subset["num_repeats"] == 4
+    # subset is a list of 3 dicts: [non_dominant, dominant, crops]
+    crops_subset = subset[2]
+    assert crops_subset["num_repeats"] == 4
 
-    aug_dir = Path(subset["image_dir"])
+    aug_dir = Path(crops_subset["image_dir"])
     assert aug_dir.exists()
 
     generated_images = sorted(aug_dir.glob("*.png")) + sorted(aug_dir.glob("*.jpg"))
     assert generated_images, "Expected at least one generated augmented image"
 
-    expected_target_buckets = set(minority)
+    # Crop targets are adjacent resolutions (±16px) or minority buckets
+    # that escape the dominant bucket — verify they're valid bucket sizes
     for image_path in generated_images:
         assert image_path.with_suffix(".txt").exists()
         image = cv2.imread(str(image_path))
         assert image is not None
         h, w = image.shape[:2]
-        assert (w, h) in expected_target_buckets
+        # Must be valid bucket resolution (≥256, multiple of 16)
+        assert w >= 256 and h >= 256
+        assert w % 16 == 0 and h % 16 == 0
+        # Must NOT be the dominant bucket
+        assert (w, h) != (848, 1184)
 
 
 def test_maybe_build_bucket_rebalance_uses_resolution_param(tmp_path: Path):
@@ -182,4 +193,5 @@ def test_maybe_build_bucket_rebalance_uses_resolution_param(tmp_path: Path):
     )
 
     assert subset is not None
-    assert Path(subset["image_dir"]).exists()
+    # subset is a list of 3 dicts: [non_dominant, dominant, crops]
+    assert Path(subset[0]["image_dir"]).exists()
