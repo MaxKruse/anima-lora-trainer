@@ -255,7 +255,7 @@ def run_single_training(params: dict, output_dir: Path, job_id: str) -> dict:
     generate_dataset_toml(
         batch_size=params["batch_size"],
         num_images=total_images,
-        epochs=params.get("epochs", 10),
+        epochs=params.get("epochs", 4),
         num_repeats=num_repeats,
         output_path=str(dataset_toml_path),
         resolution=params.get("resolution", 1024),
