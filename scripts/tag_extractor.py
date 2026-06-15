@@ -16,8 +16,8 @@ def extract_tags(directory: str) -> list[str]:
         if not content:
             continue
 
-        # Tags are comma-separated (e.g., "1girl, red hair, large breasts")
-        for tag in content.split(","):
+        # Tags are comma or space separated
+        for tag in content.replace(",", " ").split():
             tag = tag.strip().lower()
             if tag:
                 tags.add(tag)

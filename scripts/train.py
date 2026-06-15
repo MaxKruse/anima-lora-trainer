@@ -23,8 +23,6 @@ import logging
 import math
 import os
 import random
-import re
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -40,9 +38,9 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
-from scripts.command_builder import build_training_command
 from scripts.dataset_toml import generate_dataset_toml, discover_subsets as _discover_subsets
 from scripts.zip_training_data import zip_training_data
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -387,9 +385,78 @@ def validate_dataset(image_dir: str, max_steps: int = 800, batch_size: int = 4) 
     return True, warnings
 
 
-# ── Training ─────────────────────────────────────────────────────────────
+# ── In-process training ──────────────────────────────────────────────────
+
+class _TqdmProgressWrapper(tqdm):
+    """Wrapper around tqdm that tracks progress and checks for cancel signals.
+
+    Installed as a drop-in replacement for tqdm before kohya-ss training starts.
+    Every call to .update() fires callbacks so the CLI can update manifests.
+    """
+    _callbacks: list = []
+    _cancel_path = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._step_count = 0
+
+    @classmethod
+    def set_callbacks(cls, callbacks: list, cancel_path: Path | None = None):
+        cls._callbacks = callbacks
+        cls._cancel_path = cancel_path
+
+    def update(self, n=1):
+        self._step_count += n
+        for cb in self._callbacks:
+            try:
+                cb(self._step_count, self)
+            except Exception:
+                pass
+        # Check cancel signal
+        if self._cancel_path and self._cancel_path.exists():
+            logger.info("Cancel signal detected")
+            raise KeyboardInterrupt("Training cancelled")
+        return super().update(n)
+
+
+def _build_kohya_args(params: dict) -> argparse.Namespace:
+    """Build an argparse.Namespace matching kohya-ss CLI arguments."""
+    p = params
+    return argparse.Namespace(
+        pretrained_model_name_or_path=MODEL_PATHS["diffusion_model"],
+        qwen3=MODEL_PATHS["text_encoder"],
+        vae=MODEL_PATHS["vae"],
+        dataset_config=p["dataset_config"],
+        output_dir=p["output_dir"],
+        output_name=p["lora_name"],
+        save_model_as="safetensors",
+        network_module="networks.lora_anima",
+        network_dim=p["network_dim"],
+        network_alpha=p["network_alpha"],
+        learning_rate=p["learning_rate"],
+        train_batch_size=p["batch_size"],
+        optimizer_type=p["optimizer"],
+        lr_scheduler=p["scheduler"],
+        timestep_sampling=p["timestep_sampling"],
+        discrete_flow_shift=1.0,
+        mixed_precision=p["mixed_precision"],
+        max_train_steps=p["max_steps"],
+        save_every_n_steps=max(1, p["max_steps"] // 10),
+        gradient_checkpointing=p.get("gradient_checkpointing", True),
+        cache_latents=p.get("cache_latents", True),
+        cache_text_encoder_outputs=p.get("cache_text_encoder", False),
+        network_train_unet_only=p.get("cache_text_encoder", False),
+        vae_chunk_size=64,
+        vae_disable_cache=True,
+    )
+
+
 def run_single_training(params: dict, output_dir: Path, job_id: str) -> dict:
-    """Run a single training job with progress tracking."""
+    """Run a single training job in-process (no subprocess spawning).
+
+    Directly imports and calls kohya-ss's AnimaNetworkTrainer.train(),
+    wrapping tqdm for progress tracking and cancel support.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     log_path = output_dir / "training.log"
@@ -448,82 +515,89 @@ def run_single_training(params: dict, output_dir: Path, job_id: str) -> dict:
     except Exception as e:
         logger.warning(f"Zip creation skipped: {e}")
 
-    # Build training command
+    # ── Setup in-process Kohya-ss training ─────────────────────────────
     params["dataset_config"] = str(dataset_toml_path)
-    cmd = build_training_command(params)
 
-    # Launch via uv run
-    full_cmd = ["uv", "run"] + cmd
-    logger.info(f"Launching: {' '.join(full_cmd[:10])}...")
+    # Add sd-scripts to path so we can import kohya-ss modules
+    sd_scripts_dir = str(_project_root / "sd-scripts")
+    if sd_scripts_dir not in sys.path:
+        sys.path.insert(0, sd_scripts_dir)
 
-    env = os.environ.copy()
-    env["PYTHONIOENCODING"] = "utf-8"
-    env["PYTHONUNBUFFERED"] = "1"
-
-    # Parse tqdm progress from kohya-ss output
-    tqdm_re = re.compile(r"steps:\s+(\d+)%.*?\|\s+(\d+)/(\d+)\s+.*?avr_loss=([\d.]+)")
-    tqdm_min_re = re.compile(r"steps:\s+(\d+)%.*?\|\s+(\d+)/(\d+)")
-
+    # Progress tracking state (set up BEFORE importing kohya-ss)
     current_step = 0
     total_steps = params.get("max_steps", 800)
     avg_loss = None
-
-    proc = subprocess.Popen(
-        full_cmd,
-        cwd=str(_project_root),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        env=env,
-    )
-
     cancel_path = _project_root / "jobs" / f"{job_id}.cancel"
 
+    def _on_step(step: int, bar):
+        nonlocal current_step, total_steps, avg_loss
+        current_step = step
+        total_steps = bar.total if bar.total else total_steps
+        # Try to read loss from tqdm's internal format dict
+        if hasattr(bar, "format_dict") and "avr_loss" in bar.format_dict:
+            avg_loss = round(float(bar.format_dict["avr_loss"]), 6)
+        # Update manifest every 20 steps
+        if step % 20 == 0 and step > 0:
+            manifest["current_step"] = current_step
+            manifest["total_steps"] = total_steps
+            manifest["avg_loss"] = avg_loss
+            _write_json(manifest_path, manifest)
+
+    # Install tqdm wrapper BEFORE importing kohya-ss modules,
+    # so their "from tqdm import tqdm" gets our wrapper
+    _TqdmProgressWrapper.set_callbacks([_on_step], cancel_path)
+    import tqdm as tqdm_module
+    _real_tqdm = tqdm_module.tqdm
+    tqdm_module.tqdm = _TqdmProgressWrapper
+
+    # Now import kohya-ss modules — they'll use our patched tqdm
+    import torch
+    from anima_train_network import AnimaNetworkTrainer
+    import library.train_util as train_util
+
+    # Build args namespace for kohya-ss
+    args = _build_kohya_args(params)
+
+    # Set environment for single-process CPU thread control
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["PYTHONIOENCODING"] = "utf-8"
+
+    logger.info(f"Starting in-process training: {params['lora_name']}")
+    logger.info(f"Job ID: {job_id}")
+    logger.info(f"Output: {output_dir}")
+
+    exit_code = 0
     try:
-        with open(log_path, "w", encoding="utf-8") as log_file:
-            for raw_line in iter(proc.stdout.readline, b""):
-                # Check cancel
-                if cancel_path.exists():
-                    logger.info("Cancelled")
-                    proc.terminate()
-                    break
+        # Kohya-ss arg validation
+        train_util.verify_command_line_training_args(args)
 
-                line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
-                log_file.write(line + "\n")
-                log_file.flush()
+        # Handle attn_mode backward compat (same as anima_train_network.py __main__)
+        if hasattr(args, "attn_mode") and args.attn_mode == "sdpa":
+            args.attn_mode = "torch"
 
-                # Parse progress
-                m = tqdm_re.search(line)
-                if m:
-                    pct, cur, tot, loss = m.groups()
-                    current_step = int(cur)
-                    total_steps = int(tot)
-                    avg_loss = round(float(loss), 6)
-                else:
-                    m = tqdm_min_re.search(line)
-                    if m:
-                        pct, cur, tot = m.groups()
-                        current_step = int(cur)
-                        total_steps = int(tot)
+        # Run training in-process
+        trainer = AnimaNetworkTrainer()
+        trainer.train(args)
 
-                # Update manifest periodically
-                if current_step % 20 == 0 and current_step > 0:
-                    manifest["current_step"] = current_step
-                    manifest["total_steps"] = total_steps
-                    manifest["avg_loss"] = avg_loss
-                    _write_json(manifest_path, manifest)
-
+    except KeyboardInterrupt:
+        logger.info("Training cancelled")
+        exit_code = -1
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        exit_code = 1
     finally:
-        exit_code = proc.wait()
-
         # Final manifest update
         manifest["current_step"] = current_step
         manifest["total_steps"] = total_steps
         manifest["avg_loss"] = avg_loss
         manifest["exit_code"] = exit_code
-        manifest["status"] = "completed" if exit_code == 0 else "failed"
-        if cancel_path.exists():
-            manifest["status"] = "cancelled"
+        manifest["status"] = "completed" if exit_code == 0 else (
+            "cancelled" if cancel_path.exists() else "failed"
+        )
         _write_json(manifest_path, manifest)
+
+        # Restore original tqdm
+        tqdm_module.tqdm = _real_tqdm
 
         # Clean up cancel file
         if cancel_path.exists():
