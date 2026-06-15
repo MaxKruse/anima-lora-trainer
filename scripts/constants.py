@@ -21,7 +21,7 @@ DEFAULTS = {
     "gradient_checkpointing": True,
     "cache_latents": True,
     "cache_text_encoder": False,
-    "caption_tag_dropout_rate": 0.05,
+    "caption_tag_dropout_rate": 0.1,
     "keep_tokens": 1,
 }
 

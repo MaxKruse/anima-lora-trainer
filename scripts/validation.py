@@ -94,14 +94,23 @@ def write_validation_marker(
     return marker_path
 
 
-def calculate_repeats(num_images: int, max_steps: int = 800, batch_size: int = 4) -> int:
-    """Calculate num_repeats so one epoch covers ~max_steps.
+def calculate_repeats(
+    num_images: int,
+    max_steps: int = 800,
+    batch_size: int = 4,
+    target_epochs: int = 4,
+) -> int:
+    """Calculate num_repeats to reach a target epoch count.
 
-    Targets ~3-5 epochs for smooth convergence.
-    Formula: repeats = ceil(max_steps * batch_size / (num_images * 4))
+    Derivation:
+      steps_per_epoch ~= (num_images * num_repeats) / batch_size
+      target_epochs ~= max_steps / steps_per_epoch
+      num_repeats ~= (max_steps * batch_size) / (num_images * target_epochs)
     """
-    batches_per_epoch_needed = max_steps / 4  # target ~4 epochs
-    return max(1, math.ceil(batches_per_epoch_needed / num_images))
+    if num_images <= 0 or max_steps <= 0 or batch_size <= 0 or target_epochs <= 0:
+        return 1
+    samples_per_epoch_needed = (max_steps * batch_size) / target_epochs
+    return max(1, math.ceil(samples_per_epoch_needed / num_images))
 
 
 def validate_dataset(
@@ -201,14 +210,11 @@ def validate_dataset(
         )
         warnings.append(msg)
 
-    # ── Training math ──────────────────────────────────────────────────
-    repeats = calculate_repeats(total_images, max_steps, batch_size)
-
     # Write validation marker
     params = {"max_steps": max_steps, "batch_size": batch_size}
     marker_path = write_validation_marker(
         image_dir, subsets, params, warnings
     )
-    print(f"\n  \u2713 Validated (repeats={repeats})")
+    print("\n  \u2713 Validated")
 
     return True, warnings

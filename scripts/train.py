@@ -40,6 +40,7 @@ from scripts.cli_args import (
     parse_param_ranges,
 )
 from scripts.constants import (
+    IMAGE_EXTENSIONS,
     MODEL_PATHS,
     PROJECT_ROOT,
 )
@@ -127,6 +128,59 @@ def _copy_final_model(perm_dir: Path, output_base: Path, lora_name: str, perm: d
     dest = output_base / name
     dest.write_bytes(final_model.read_bytes())
     logger.info("Copied final model: %s", dest.name)
+
+
+def _count_images_in_dir(image_dir: str) -> int:
+    """Count image files in a directory (non-recursive)."""
+    path = Path(image_dir)
+    if not path.exists() or not path.is_dir():
+        return 0
+    return sum(
+        1
+        for entry in path.iterdir()
+        if entry.is_file() and entry.suffix.lower() in IMAGE_EXTENSIONS
+    )
+
+
+def _scale_subset_repeats_to_target_epochs(
+    subset_configs: list[dict],
+    max_steps: int,
+    batch_size: int,
+    target_epochs: int,
+) -> tuple[list[dict], int]:
+    """Scale final subset repeats so configured epochs align with max_steps.
+
+    Preserves relative per-subset repeat ratios (e.g. bucket rebalance) by
+    applying one global multiplier across all subsets.
+    """
+    if not subset_configs:
+        return subset_configs, 1
+
+    effective_images = sum(
+        _count_images_in_dir(s["image_dir"]) * max(1, int(s.get("num_repeats", 1)))
+        for s in subset_configs
+    )
+    if effective_images <= 0:
+        return subset_configs, 1
+
+    repeat_scale = calculate_repeats(
+        effective_images,
+        max_steps=max_steps,
+        batch_size=batch_size,
+        target_epochs=target_epochs,
+    )
+
+    scaled_subsets = []
+    for subset in subset_configs:
+        base_repeat = max(1, int(subset.get("num_repeats", 1)))
+        scaled_subsets.append(
+            {
+                **subset,
+                "num_repeats": base_repeat * repeat_scale,
+            }
+        )
+
+    return scaled_subsets, repeat_scale
 
 
 # ── In-process training ──────────────────────────────────────────────────
@@ -230,17 +284,16 @@ def run_single_training(params: dict, output_dir: Path, job_id: str) -> dict:
         return {"status": "failed", "error": "No images found", "output_dir": str(output_dir)}
 
     total_images = sum(s["num_images"] for s in subsets)
-    num_repeats = params.get("repeats") or calculate_repeats(
-        total_images, params.get("max_steps", 800), params.get("batch_size", 4)
-    )
+    manual_repeats = params.get("repeats")
+    base_repeats = manual_repeats if manual_repeats is not None else 1
 
-    subset_configs = [{"image_dir": s["image_dir"], "num_repeats": num_repeats} for s in subsets]
+    subset_configs = [{"image_dir": s["image_dir"], "num_repeats": base_repeats} for s in subsets]
 
     # Bucket rebalance
     rebalance_subsets = maybe_build_bucket_rebalance_subset(
         training_images=params["training_images"],
         output_dir=output_dir,
-        num_repeats=num_repeats,
+        num_repeats=base_repeats,
         enabled=params.get("rebalance_buckets", False),
         dominance_threshold=params.get("bucket_dominance_threshold", 0.20),
         max_augmented_images=params.get("bucket_rebalance_max_aug", 64),
@@ -249,6 +302,18 @@ def run_single_training(params: dict, output_dir: Path, job_id: str) -> dict:
     )
     if rebalance_subsets is not None:
         subset_configs = rebalance_subsets
+
+    # Final step before writing dataset TOML: scale repeats to target epochs.
+    if manual_repeats is None:
+        subset_configs, repeat_scale = _scale_subset_repeats_to_target_epochs(
+            subset_configs=subset_configs,
+            max_steps=params.get("max_steps", 800),
+            batch_size=params.get("batch_size", 4),
+            target_epochs=params.get("epochs", 2),
+        )
+        num_repeats = repeat_scale
+    else:
+        num_repeats = manual_repeats
 
     # Generate dataset TOML
     dataset_toml_path = output_dir / "dataset.toml"
@@ -260,7 +325,7 @@ def run_single_training(params: dict, output_dir: Path, job_id: str) -> dict:
         output_path=str(dataset_toml_path),
         resolution=params.get("resolution", 1024),
         cache_text_encoder_outputs=params.get("cache_text_encoder", False),
-        caption_tag_dropout_rate=params.get("caption_tag_dropout_rate", 0.05),
+        caption_tag_dropout_rate=params.get("caption_tag_dropout_rate", 0.1),
         keep_tokens=params.get("keep_tokens", 1),
         subsets=subset_configs,
     )

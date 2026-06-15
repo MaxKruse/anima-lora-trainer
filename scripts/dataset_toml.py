@@ -77,7 +77,7 @@ def generate_dataset_toml(
     output_path: str = "dataset.toml",
     resolution: int = 1024,
     cache_text_encoder_outputs: bool = False,
-    caption_tag_dropout_rate: float = 0.05,
+    caption_tag_dropout_rate: float = 0.1,
     keep_tokens: int = 1,
     subsets: list[dict[str, Any]] | None = None,
 ) -> str:
