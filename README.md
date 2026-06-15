@@ -1,6 +1,6 @@
 # LoRA Matrix Trainer
 
-Train Anima character LoRA models via CLI — single runs or matrix hyperparameter sweeps.
+Train Anima character LoRA models via a lightweight CLI wrapper around `sd-scripts` — single runs or matrix hyperparameter sweeps.
 
 ## Quick Start
 
@@ -8,14 +8,14 @@ Train Anima character LoRA models via CLI — single runs or matrix hyperparamet
 # Install Python dependencies
 uv sync
 
-# 1. Validate your dataset (mandatory — creates output dir)
-uv run python scripts/train.py --validate --dataset datasets/froot/img
+# 1. Validate your dataset (mandatory)
+uv run .\scripts\train.py --validate --dataset .\datasets\froot\img
 
 # 2. Train a single LoRA (uses proven defaults)
-uv run python scripts/train.py --mode single --dataset datasets/froot/img --name Froot-Anima
+uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Froot-Anima
 
 # 3. Matrix sweep (all permutations)
-uv run python scripts/train.py --mode matrix --dataset datasets/froot/img --name Froot --network-dim 16,20,32 --alpha 1,20
+uv run .\scripts\train.py --mode matrix --dataset .\datasets\froot\img --name Froot --network-dim 16,20,32 --alpha 1,20
 ```
 
 **Validation is mandatory.** Training will refuse to start until you've run `--validate` on the dataset. Validation:
@@ -55,7 +55,7 @@ Each subdirectory gets its own `[[datasets.subsets]]` entry in the generated `da
 ### Validate Before Training (Mandatory)
 
 ```bash
-uv run python scripts/train.py --validate --dataset datasets/froot/img
+uv run .\scripts\train.py --validate --dataset .\datasets\froot\img
 ```
 
 **Must be run before any training.** Creates the output directory and writes a validation marker.
@@ -75,13 +75,13 @@ Warnings are non-blocking — training proceeds even with warnings. Only hard er
 Train one LoRA with fixed parameters. All flags default to values from proven training runs (froot: 44 images, mari_setogaya: 14 images).
 
 ```bash
-uv run python scripts/train.py --mode single \
-  --dataset datasets/froot/img \
-  --name Froot-Anima \
-  --lr 0.0002 \
-  --bs 4 \
-  --network-dim 20 \
-  --alpha 1
+uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Froot-Anima
+
+# custom params
+uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Froot-Anima --max-steps 500 --lr 0.0002 --bs 4 --network-dim 20 --alpha 1
+
+# bucket skew rebalance (training-time random-crop augmentation)
+uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Froot-Anima --rebalance-buckets
 ```
 
 ### Matrix Run
@@ -89,19 +89,14 @@ uv run python scripts/train.py --mode single \
 Specify comma-separated values for any parameter — all permutations are trained sequentially with a shared test prompt for comparison.
 
 ```bash
-uv run python scripts/train.py --mode matrix \
-  --dataset datasets/froot/img \
-  --name Froot \
-  --network-dim 16,20,32 \
-  --alpha 1,16,20 \
-  --lr 0.0001,0.0002
+uv run .\scripts\train.py --mode matrix --dataset .\datasets\froot\img --name Froot --network-dim 16,20,32 --alpha 1,16,20 --lr 0.0001,0.0002
 ```
 
 This generates 3 × 3 × 2 = **18 training runs**.
 
 **Resume** an interrupted matrix run:
 ```bash
-uv run python scripts/train.py --mode matrix --resume ...
+uv run .\scripts\train.py --mode matrix --resume --dataset .\datasets\froot\img --name Froot --network-dim 16,20,32 --alpha 1,20
 ```
 
 **Cancel** a running job:
@@ -157,6 +152,10 @@ All accept comma-separated values in matrix mode.
 | `--no-gradient-checkpointing` | off | Disable gradient checkpointing |
 | `--no-cache-latents` | off | Disable latent caching |
 | `--cache-text-encoder` | off | Enable text encoder caching |
+| `--rebalance-buckets` | off | Detect dominant bucket skew and add random-crop augmented samples |
+| `--bucket-dominance-threshold` | 0.35 | Dominant bucket share threshold that triggers rebalance |
+| `--bucket-rebalance-max-aug` | 64 | Max augmented crops generated for rebalance |
+| `--bucket-rebalance-seed` | 42 | RNG seed used for rebalance crop generation |
 
 ### Matrix
 
@@ -187,7 +186,6 @@ These defaults come from successful training runs on real character datasets:
 ```
 datasets/froot/out/job-1781162746594-khr542/
   dataset.toml              ← generated dataset config
-  training.log              ← training log
   job_manifest.json         ← progress/status
   Froot-Anima-step00000080.safetensors
   Froot-Anima-step00000160.safetensors
@@ -197,22 +195,30 @@ datasets/froot/out/job-1781162746594-khr542/
   training-data.zip         ← backup of training data
 ```
 
-Matrix runs create subdirectories per permutation under the job folder.
+Matrix runs create one top-level `manifest.json` and subdirectories per permutation under the job folder.
 
 ## Project Structure
 
 ```
 scripts/
   train.py                  ← unified CLI (single + matrix modes)
-  command_builder.py        ← builds accelerate/kohya-ss commands
   dataset_toml.py           ← generates kohya-ss dataset config
-  train_single.py           ← legacy single training (kept for compat)
-  matrix_trainer.py         ← legacy matrix training (kept for compat)
+  zip_training_data.py      ← creates training-data zip backups per run
   infer_batch.py            ← ad-hoc batch inference on existing LoRAs
   prompt_generator.py       ← generate test prompts from tags
   tag_extractor.py          ← extract tags from .txt captions
-  sdcli_builder.py          ← build sd-cli inference commands
+  model_verify.py           ← verify/download model files
+  setup_env.py              ← environment setup helper
+  rename_output_dirs.py     ← rename legacy output directories
 sd-scripts/                 ← kohya-ss/sd-scripts (training engine)
 models/                     ← downloaded base models
 datasets/                   ← training datasets
 ```
+
+## Notes On Current Wrapper Behavior
+
+- The wrapper runs training in-process by importing `anima_train_network.py` from `sd-scripts`.
+- A full kohya argument namespace is built from `anima_train_network.setup_parser()` defaults, then wrapper values are applied.
+- This keeps compatibility with upstream arguments while still providing a small user-facing CLI.
+- When `--rebalance-buckets` is enabled on an actual training run, the wrapper checks bucket distribution first.
+- If one bucket exceeds `--bucket-dominance-threshold`, random-crop augmentations are generated into the job output under `bucket-rebalance/` and included as an extra subset in `dataset.toml`.

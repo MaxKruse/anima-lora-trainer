@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import shutil
 import json
 import logging
 import math
@@ -27,6 +28,9 @@ import sys
 import time
 from pathlib import Path
 from itertools import product
+
+import cv2
+import numpy as np
 
 # ── Project setup ────────────────────────────────────────────────────────
 _project_root = Path(__file__).resolve().parent.parent
@@ -103,6 +107,467 @@ def count_captions(image_dir: str) -> int:
     if not root.exists():
         return 0
     return sum(1 for _ in root.rglob("*.txt") if _.is_file())
+
+
+def _imread(path: Path):
+    """Read an image with Windows-safe path handling."""
+    try:
+        data = np.fromfile(str(path), dtype=np.uint8)
+        if data.size == 0:
+            return None
+        return cv2.imdecode(data, cv2.IMREAD_COLOR)
+    except Exception:
+        return None
+
+
+def _imwrite(path: Path, image) -> bool:
+    """Write an image with Windows-safe path handling."""
+    ext = path.suffix.lower() if path.suffix.lower() in IMAGE_EXTENSIONS else ".png"
+    try:
+        ok, encoded = cv2.imencode(ext, image)
+        if not ok:
+            return False
+        encoded.tofile(str(path))
+        return True
+    except Exception:
+        return False
+
+
+def _get_kohya_bucket_manager(resolution: int, min_bucket_reso: int, max_bucket_reso: int, reso_steps: int):
+    """Create a kohya BucketManager configured like our dataset.toml settings."""
+    sd_scripts_dir = str(_project_root / "sd-scripts")
+    if sd_scripts_dir not in sys.path:
+        sys.path.insert(0, sd_scripts_dir)
+
+    from library.train_util import BucketManager
+
+    manager = BucketManager(
+        True,  # bucket_no_upscale
+        (resolution, resolution),
+        min_bucket_reso,
+        max_bucket_reso,
+        reso_steps,
+    )
+    return manager
+
+
+def assign_bucket_resolution(
+    width: int,
+    height: int,
+    resolution: int = 1024,
+    min_bucket_reso: int = 768,
+    max_bucket_reso: int = 1024,
+    reso_steps: int = 16,
+) -> tuple[int, int]:
+    """Assign bucket resolution using kohya's select_bucket behavior."""
+    try:
+        manager = _get_kohya_bucket_manager(
+            resolution=resolution,
+            min_bucket_reso=min_bucket_reso,
+            max_bucket_reso=max_bucket_reso,
+            reso_steps=reso_steps,
+        )
+        bucket_reso, _resized_size, _ar_error = manager.select_bucket(width, height)
+        return bucket_reso
+    except Exception:
+        # Fallback keeps behavior deterministic if kohya import fails.
+        q_w = max(reso_steps, int(round(width / reso_steps) * reso_steps))
+        q_h = max(reso_steps, int(round(height / reso_steps) * reso_steps))
+        return q_w, q_h
+
+
+def collect_bucket_members(
+    training_images: str,
+    resolution: int = 1024,
+    min_bucket_reso: int = 768,
+    max_bucket_reso: int = 1024,
+    reso_steps: int = 16,
+) -> tuple[dict[tuple[int, int], int], dict[tuple[int, int], list[Path]], int]:
+    """Collect bucket counts and source members from dataset root + immediate subdirs."""
+    counts: dict[tuple[int, int], int] = {}
+    members: dict[tuple[int, int], list[Path]] = {}
+    skipped = 0
+
+    manager = None
+    try:
+        manager = _get_kohya_bucket_manager(
+            resolution=resolution,
+            min_bucket_reso=min_bucket_reso,
+            max_bucket_reso=max_bucket_reso,
+            reso_steps=reso_steps,
+        )
+    except Exception:
+        manager = None
+
+    for subset in discover_subsets(training_images):
+        subset_dir = Path(subset["image_dir"])
+        for entry in subset_dir.iterdir():
+            if not entry.is_file() or entry.suffix.lower() not in IMAGE_EXTENSIONS:
+                continue
+            image = _imread(entry)
+            if image is None:
+                skipped += 1
+                continue
+            h, w = image.shape[:2]
+            if manager is not None:
+                bucket, _resized_size, _ar_error = manager.select_bucket(w, h)
+            else:
+                bucket = assign_bucket_resolution(
+                    w,
+                    h,
+                    resolution=resolution,
+                    min_bucket_reso=min_bucket_reso,
+                    max_bucket_reso=max_bucket_reso,
+                    reso_steps=reso_steps,
+                )
+            counts[bucket] = counts.get(bucket, 0) + 1
+            members.setdefault(bucket, []).append(entry)
+
+    return counts, members, skipped
+
+
+def _find_crop_targets(
+    dominant_bucket: tuple[int, int],
+    dominant_members: list[Path],
+    all_buckets: set[tuple[int, int]],
+    reso_steps: int = 16,
+) -> list[tuple[int, int]]:
+    """Generate crop target resolutions that escape the dominant bucket.
+
+    A valid crop target must be larger than the dominant bucket in at least
+    one dimension — otherwise kohya (with bucket_no_upscale) would assign
+    the cropped image back to the dominant bucket.
+
+    Targets don't need to be existing buckets — kohya will assign cropped images
+    to the nearest fitting bucket. This spreads redistributed images across
+    multiple nearby buckets instead of piling them into one.
+
+    Targets are filtered to ensure they fit within the average source image size
+    (since bucket_no_upscale means images are typically larger than bucket reso).
+    """
+    dw, dh = dominant_bucket
+
+    # Estimate average source image size from dominant members.
+    avg_w, avg_h = dw, dh  # fallback to bucket resolution
+    if dominant_members:
+        sizes = []
+        for path in dominant_members[:20]:
+            img = _imread(path)
+            if img is not None:
+                sizes.append((img.shape[1], img.shape[0]))
+        if sizes:
+            avg_w = int(sum(s[0] for s in sizes) / len(sizes))
+            avg_h = int(sum(s[1] for s in sizes) / len(sizes))
+
+    # Generate candidates: ±reso_steps in each dimension.
+    candidates = []
+    for delta_w in (-reso_steps, reso_steps):
+        for delta_h in (-reso_steps, 0, reso_steps):
+            if delta_w == 0 and delta_h == 0:
+                continue
+            tw, th = dw + delta_w, dh + delta_h
+            if tw >= 256 and th >= 256:
+                candidates.append((tw, th))
+
+    def _kohya_assigns_to(target: tuple[int, int]) -> tuple[int, int] | None:
+        """Find which existing bucket kohya would assign an image of given size to."""
+        tw, th = target
+        fitting = [
+            b for b in all_buckets
+            if b[0] >= tw and b[1] >= th
+        ]
+        if not fitting:
+            return None  # would create new bucket
+        # Kohya picks smallest fitting bucket (by area)
+        return min(fitting, key=lambda b: b[0] * b[1])
+
+    # Filter: only keep targets that escape the dominant bucket.
+    valid = []
+    for target in candidates:
+        # Must fit within source image
+        if target[0] > avg_w or target[1] > avg_h:
+            continue
+        # Must not be assigned back to dominant bucket
+        assigned = _kohya_assigns_to(target)
+        if assigned is None:
+            # No existing bucket fits — kohya will create one. Safe.
+            valid.append(target)
+        elif assigned != dominant_bucket:
+            # Assigned to a different bucket. Good.
+            valid.append(target)
+        # else: would go back to dominant bucket — skip
+
+    return valid
+
+
+def plan_bucket_rebalance(
+    bucket_counts: dict[tuple[int, int], int],
+    dominance_threshold: float,
+    max_augmented_images: int,
+) -> dict | None:
+    """Create a rebalance plan when one bucket dominates too strongly.
+
+    Strategy: crop excess images from the dominant bucket to adjacent bucket
+    resolutions (±16px in one dimension) and place them in a rebalance subset.
+    This directly reduces the dominant bucket's share of the training data.
+
+    Returns a plan dict with images_to_move and target buckets, or None if
+    no rebalancing is needed.
+    """
+    if len(bucket_counts) < 3:
+        return None
+
+    total = sum(bucket_counts.values())
+    if total <= 0:
+        return None
+
+    dominant_bucket, dominant_count = max(bucket_counts.items(), key=lambda x: x[1])
+    dominant_share = dominant_count / total
+    if dominant_share <= dominance_threshold:
+        return None
+
+    # Calculate source images to move.
+    # Each moved image becomes a crop placed in an adjacent bucket.
+    # With repeats=r: new_total = total + moved*r, dominant_share = dominant / new_total
+    # Solve: dominant / (total + moved*r) <= threshold
+    #   => moved >= (dominant / threshold - total) / r
+    # We don't know repeats yet, so estimate with repeats=1 (conservative upper bound).
+    needed = max(0, math.ceil(dominant_count / dominance_threshold - total))
+    available = dominant_count  # can't move more source images than exist
+    images_to_move = min(available, max_augmented_images, max(1, needed))
+
+    if images_to_move <= 0:
+        return None
+
+    return {
+        "dominant_bucket": dominant_bucket,
+        "dominant_count": dominant_count,
+        "dominant_share": dominant_share,
+        "images_to_move": images_to_move,
+    }
+
+
+def _random_crop_to_bucket(
+    image,
+    target_bucket: tuple[int, int],
+    rng: random.Random,
+) -> np.ndarray | None:
+    """Crop then resize to exact target bucket resolution for deterministic assignment.
+
+    The target_bucket is always a multiple-of-16 resolution (kohya bucket key),
+    so the augmented image will be assigned to the correct bucket by kohya.
+    """
+    target_w, target_h = target_bucket
+    target_ratio = target_w / target_h
+
+    h, w = image.shape[:2]
+    source_ratio = w / h
+
+    if source_ratio > target_ratio:
+        crop_h = h
+        crop_w = max(32, int(round(h * target_ratio)))
+    else:
+        crop_w = w
+        crop_h = max(32, int(round(w / target_ratio)))
+
+    crop_w = min(crop_w, w)
+    crop_h = min(crop_h, h)
+    if crop_w < 32 or crop_h < 32:
+        return None
+
+    max_x = w - crop_w
+    max_y = h - crop_h
+    x = rng.randint(0, max_x) if max_x > 0 else 0
+    y = rng.randint(0, max_y) if max_y > 0 else 0
+
+    cropped = image[y : y + crop_h, x : x + crop_w]
+    return cv2.resize(cropped, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+
+def maybe_build_bucket_rebalance_subset(
+    training_images: str,
+    output_dir: Path,
+    num_repeats: int,
+    enabled: bool,
+    dominance_threshold: float,
+    max_augmented_images: int,
+    seed: int,
+    resolution: int = 1024,
+) -> list[dict] | None:
+    """Redistribute excess images from a dominant bucket using per-subset repeats.
+
+    When a single bucket holds more than dominance_threshold of all images:
+    1. Copy dominant images to a dedicated subset with LOWER repeats
+    2. Copy non-dominant images to a dedicated subset with NORMAL repeats
+    3. Create cropped variants (±16px) and place in a third subset
+
+    The caller should REPLACE the original dataset subsets with these configs
+    to avoid double-counting.
+
+    Returns a list of subset dicts (ready for dataset TOML), or None if
+    no rebalancing is needed.
+    """
+    if not enabled:
+        return None
+
+    bucket_counts, bucket_members, skipped = collect_bucket_members(
+        training_images,
+        resolution=resolution,
+        min_bucket_reso=768,
+        max_bucket_reso=resolution,
+        reso_steps=16,
+    )
+    if skipped > 0:
+        logger.warning(f"Bucket check skipped {skipped} unreadable image(s)")
+
+    plan = plan_bucket_rebalance(bucket_counts, dominance_threshold, max_augmented_images)
+    if plan is None:
+        logger.info("Bucket rebalance check: distribution within threshold")
+        return None
+
+    dominant_bucket = plan["dominant_bucket"]
+    dominant_members = bucket_members.get(dominant_bucket, [])
+    images_to_move = plan["images_to_move"]
+
+    if not dominant_members:
+        return None
+
+    # Find crop targets that escape the dominant bucket.
+    all_buckets = set(bucket_counts.keys())
+    crop_targets = _find_crop_targets(dominant_bucket, dominant_members, all_buckets)
+    if not crop_targets:
+        logger.info(
+            "Bucket rebalance: no valid crop targets for %s — skipping",
+            dominant_bucket,
+        )
+        return None
+
+    # Calculate per-subset repeats to bring dominant share below threshold.
+    # dominant_eff = dom_count * r_d
+    # non_dom_eff = non_dom_count * r_nd
+    # crop_eff = crops * r_c
+    # Want: dominant_eff / (dominant_eff + non_dom_eff + crop_eff) <= threshold
+    non_dominant_count = sum(bucket_counts.values()) - plan["dominant_count"]
+    crops_to_create = min(images_to_move, len(dominant_members))
+
+    # r_nd = num_repeats, r_c = num_repeats, solve for r_d:
+    #   dom * r_d <= threshold * (dom * r_d + non_dom * r_nd + crops * r_c)
+    #   r_d <= (non_dom * r_nd + crops * r_c) * threshold / (dom * (1 - threshold))
+    r_nd = num_repeats
+    r_c = num_repeats
+    max_r_d = (
+        (non_dominant_count * r_nd + crops_to_create * r_c) * dominance_threshold
+        / (plan["dominant_count"] * (1 - dominance_threshold))
+    )
+    r_d = max(1, int(max_r_d))  # floor to ensure we're below threshold
+
+    # Recalculate actual share with floored r_d
+    dom_eff = plan["dominant_count"] * r_d
+    non_dom_eff = non_dominant_count * r_nd
+    crop_eff = crops_to_create * r_c
+    total_eff = dom_eff + non_dom_eff + crop_eff
+    actual_share = dom_eff / total_eff * 100 if total_eff > 0 else 0
+
+    logger.warning(
+        "Bucket rebalance: dominant bucket %s at %.1f%% (%d source image(s)); "
+        "splitting into per-subset repeats — dominant r=%d, others r=%d, crops r=%d "
+        "(%d crops to %s) — new share ~%.1f%%",
+        dominant_bucket,
+        plan["dominant_share"] * 100,
+        plan["dominant_count"],
+        r_d,
+        r_nd,
+        r_c,
+        crops_to_create,
+        crop_targets,
+        actual_share,
+    )
+
+    # ── Create subset directories ──────────────────────────────────────
+    rebalance_base = output_dir / "bucket-rebalance"
+    if rebalance_base.exists():
+        shutil.rmtree(rebalance_base)
+
+    dominant_dir = rebalance_base / "dominant"
+    non_dominant_dir = rebalance_base / "non_dominant"
+    crops_dir = rebalance_base / "crops"
+    dominant_dir.mkdir(parents=True)
+    non_dominant_dir.mkdir(parents=True)
+    crops_dir.mkdir(parents=True)
+
+    dominant_member_set = set(dominant_members)
+    rng = random.Random(seed)
+    sources = rng.sample(dominant_members, crops_to_create)
+
+    # Copy dominant images
+    for src in dominant_members:
+        dst = dominant_dir / src.name
+        shutil.copy2(str(src), str(dst))
+        cap = src.with_suffix(".txt")
+        if cap.exists():
+            shutil.copy2(str(cap), str(dominant_dir / cap.name))
+
+    # Copy non-dominant images
+    for bucket, members in bucket_members.items():
+        if bucket == dominant_bucket:
+            continue
+        for src in members:
+            dst = non_dominant_dir / src.name
+            shutil.copy2(str(src), str(dst))
+            cap = src.with_suffix(".txt")
+            if cap.exists():
+                shutil.copy2(str(cap), str(non_dominant_dir / cap.name))
+
+    # Create cropped images
+    generated = 0
+    for i, src in enumerate(sources):
+        target = crop_targets[i % len(crop_targets)]
+        image = _imread(src)
+        if image is None:
+            continue
+        cropped = _random_crop_to_bucket(image, target, rng)
+        if cropped is None:
+            continue
+        out_suffix = src.suffix.lower() if src.suffix.lower() in IMAGE_EXTENSIONS else ".png"
+        out_path = crops_dir / f"crop_{i:04d}_{src.stem}{out_suffix}"
+        if not _imwrite(out_path, cropped):
+            continue
+        cap = src.with_suffix(".txt")
+        if cap.exists():
+            out_path.with_suffix(".txt").write_text(
+                cap.read_text(encoding="utf-8", errors="replace"),
+                encoding="utf-8",
+            )
+        generated += 1
+
+    if generated == 0:
+        logger.warning("Bucket rebalance could not generate any cropped samples")
+        shutil.rmtree(rebalance_base, ignore_errors=True)
+        return None
+
+    logger.info(
+        "Bucket rebalance: dominant r=%d (%s), non-dominant r=%d (%s), crops r=%d (%s)",
+        r_d, dominant_dir,
+        r_nd, non_dominant_dir,
+        r_c, crops_dir,
+    )
+
+    # Return subset configs that REPLACE the original dataset subsets.
+    subsets = [
+        {
+            "image_dir": str(non_dominant_dir),
+            "num_repeats": r_nd,
+        },
+        {
+            "image_dir": str(dominant_dir),
+            "num_repeats": r_d,
+        },
+        {
+            "image_dir": str(crops_dir),
+            "num_repeats": r_c,
+        },
+    ]
+    return subsets
 
 
 # Re-export discover_subsets from dataset_toml for convenience
@@ -419,36 +884,39 @@ class _TqdmProgressWrapper(tqdm):
         return super().update(n)
 
 
-def _build_kohya_args(params: dict) -> argparse.Namespace:
-    """Build an argparse.Namespace matching kohya-ss CLI arguments."""
+def _build_kohya_args(params: dict, kohya_parser: argparse.ArgumentParser) -> argparse.Namespace:
+    """Build a full kohya-ss Namespace using parser defaults + wrapper overrides."""
     p = params
-    return argparse.Namespace(
-        pretrained_model_name_or_path=MODEL_PATHS["diffusion_model"],
-        qwen3=MODEL_PATHS["text_encoder"],
-        vae=MODEL_PATHS["vae"],
-        dataset_config=p["dataset_config"],
-        output_dir=p["output_dir"],
-        output_name=p["lora_name"],
-        save_model_as="safetensors",
-        network_module="networks.lora_anima",
-        network_dim=p["network_dim"],
-        network_alpha=p["network_alpha"],
-        learning_rate=p["learning_rate"],
-        train_batch_size=p["batch_size"],
-        optimizer_type=p["optimizer"],
-        lr_scheduler=p["scheduler"],
-        timestep_sampling=p["timestep_sampling"],
-        discrete_flow_shift=1.0,
-        mixed_precision=p["mixed_precision"],
-        max_train_steps=p["max_steps"],
-        save_every_n_steps=max(1, p["max_steps"] // 10),
-        gradient_checkpointing=p.get("gradient_checkpointing", True),
-        cache_latents=p.get("cache_latents", True),
-        cache_text_encoder_outputs=p.get("cache_text_encoder", False),
-        network_train_unet_only=p.get("cache_text_encoder", False),
-        vae_chunk_size=64,
-        vae_disable_cache=True,
-    )
+    args = kohya_parser.parse_args([])
+
+    # Override only the values controlled by this wrapper.
+    args.pretrained_model_name_or_path = MODEL_PATHS["diffusion_model"]
+    args.qwen3 = MODEL_PATHS["text_encoder"]
+    args.vae = MODEL_PATHS["vae"]
+    args.dataset_config = p["dataset_config"]
+    args.output_dir = p["output_dir"]
+    args.output_name = p["lora_name"]
+    args.save_model_as = "safetensors"
+    args.network_module = "networks.lora_anima"
+    args.network_dim = p["network_dim"]
+    args.network_alpha = p["network_alpha"]
+    args.learning_rate = p["learning_rate"]
+    args.train_batch_size = p["batch_size"]
+    args.optimizer_type = p["optimizer"]
+    args.lr_scheduler = p["scheduler"]
+    args.timestep_sampling = p["timestep_sampling"]
+    args.discrete_flow_shift = 1.0
+    args.mixed_precision = p["mixed_precision"]
+    args.max_train_steps = p["max_steps"]
+    args.save_every_n_steps = max(1, p["max_steps"] // 10)
+    args.gradient_checkpointing = p.get("gradient_checkpointing", True)
+    args.cache_latents = p.get("cache_latents", True)
+    args.cache_text_encoder_outputs = p.get("cache_text_encoder", False)
+    args.network_train_unet_only = p.get("cache_text_encoder", False)
+    args.vae_chunk_size = 64
+    args.vae_disable_cache = True
+
+    return args
 
 
 def run_single_training(params: dict, output_dir: Path, job_id: str) -> dict:
@@ -491,6 +959,21 @@ def run_single_training(params: dict, output_dir: Path, job_id: str) -> dict:
         {"image_dir": s["image_dir"], "num_repeats": num_repeats}
         for s in subsets
     ]
+
+    rebalance_subsets = maybe_build_bucket_rebalance_subset(
+        training_images=params["training_images"],
+        output_dir=output_dir,
+        num_repeats=num_repeats,
+        enabled=params.get("rebalance_buckets", False),
+        dominance_threshold=params.get("bucket_dominance_threshold", 0.20),
+        max_augmented_images=params.get("bucket_rebalance_max_aug", 64),
+        seed=params.get("bucket_rebalance_seed", 42),
+        resolution=params.get("resolution", 1024),
+    )
+    if rebalance_subsets is not None:
+        # Rebalance returns subsets that REPLACE the original ones
+        # (dominant + non-dominant + crops with per-subset repeats)
+        subset_configs = rebalance_subsets
 
     # Generate dataset TOML
     dataset_toml_path = output_dir / "dataset.toml"
@@ -552,11 +1035,11 @@ def run_single_training(params: dict, output_dir: Path, job_id: str) -> dict:
 
     # Now import kohya-ss modules — they'll use our patched tqdm
     import torch
-    from anima_train_network import AnimaNetworkTrainer
+    from anima_train_network import AnimaNetworkTrainer, setup_parser as setup_anima_parser
     import library.train_util as train_util
 
     # Build args namespace for kohya-ss
-    args = _build_kohya_args(params)
+    args = _build_kohya_args(params, setup_anima_parser())
 
     # Set environment for single-process CPU thread control
     os.environ["OMP_NUM_THREADS"] = "1"
@@ -769,6 +1252,29 @@ Examples:
         default=DEFAULTS["keep_tokens"],
         help=f"Keep first N tokens from shuffle [default: {DEFAULTS['keep_tokens']}]",
     )
+    parser.add_argument(
+        "--rebalance-buckets",
+        action="store_true",
+        help="Detect dominant bucket skew (>20% default) and redistribute by cropping excess images to adjacent buckets",
+    )
+    parser.add_argument(
+        "--bucket-dominance-threshold",
+        type=float,
+        default=0.20,
+        help="Dominant bucket share threshold that triggers rebalancing [default: 0.20]",
+    )
+    parser.add_argument(
+        "--bucket-rebalance-max-aug",
+        type=int,
+        default=64,
+        help="Maximum random-crop augmented samples to generate for bucket rebalance [default: 64]",
+    )
+    parser.add_argument(
+        "--bucket-rebalance-seed",
+        type=int,
+        default=42,
+        help="Random seed for bucket rebalance crop selection [default: 42]",
+    )
 
     # Matrix resume
     parser.add_argument(
@@ -799,6 +1305,10 @@ def parse_params(args) -> dict:
         "caption_tag_dropout_rate": args.caption_dropout,
         "keep_tokens": args.keep_tokens,
         "repeats": args.repeats,
+        "rebalance_buckets": args.rebalance_buckets,
+        "bucket_dominance_threshold": args.bucket_dominance_threshold,
+        "bucket_rebalance_max_aug": args.bucket_rebalance_max_aug,
+        "bucket_rebalance_seed": args.bucket_rebalance_seed,
     }
 
 
