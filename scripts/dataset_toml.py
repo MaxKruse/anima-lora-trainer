@@ -72,7 +72,7 @@ def generate_dataset_toml(
     image_dir: str | None = None,
     batch_size: int = 4,
     num_images: int = 0,
-    epochs: int = 4,
+    epochs: int = 2,
     num_repeats: int = 1,
     output_path: str = "dataset.toml",
     resolution: int = 1024,

@@ -10,6 +10,7 @@ DEFAULTS = {
     "network_dim": 20,
     "network_alpha": 1,
     "learning_rate": 0.0002,
+    "epochs": 2,
     "batch_size": 4,
     "max_steps": 800,
     "optimizer": "AdamW8Bit",
