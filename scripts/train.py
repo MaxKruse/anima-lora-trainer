@@ -40,6 +40,7 @@ from scripts.cli_args import (
     parse_param_ranges,
 )
 from scripts.constants import (
+    DEFAULTS,
     IMAGE_EXTENSIONS,
     MODEL_PATHS,
     PROJECT_ROOT,
@@ -251,15 +252,16 @@ class _TqdmProgressWrapper(tqdm):
 
 # ── Custom save points (monkey-patch kohya-ss) ──────────────────────────
 _save_points: set[int] = set()
-_original_save_sd_model = None
+_50p_step_global: int = 0
+_original_save_fn = None
 
 
 def _calculate_save_steps(max_steps: int) -> list[int]:
     """Calculate checkpoint save steps at specific percentages.
 
-    Saves at 50%, 66%, 75%, 82.5% of training (final 100% is handled by kohya-ss).
+    Saves at 50%, 75% of training (final 100% is handled by kohya-ss).
     """
-    percentages = [0.50, 2/3, 0.75, 0.825]
+    percentages = [0.50, 0.75]
     return [max(1, int(round(max_steps * p))) for p in percentages]
 
 
@@ -293,43 +295,56 @@ def _cleanup_extra_checkpoints(output_dir: Path, lora_name: str, max_steps: int)
 
 
 def _setup_save_filter():
-    """Monkey-patch kohya-ss save_sd_model to only save at specific steps.
+    """Monkey-patch kohya-ss model save to only save at configured steps.
 
-    Kohya-ss only supports uniform save_every_n_steps intervals.
-    We patch the save function to only write checkpoints at our custom percentages.
+    kohya-ss only supports uniform save_every_n_steps intervals.
+    We set a small interval and patch the save function to only write
+    checkpoints at 50% and 75%. At the 50% step we also save accelerator
+    state for recovery.
+
     Must be called after kohya-ss modules are imported.
     """
-    global _original_save_sd_model
+    global _original_save_fn
 
     try:
-        import library.train_util as train_util
+        from library import anima_train_utils
     except ImportError:
         return False
 
-    if not hasattr(train_util, "save_sd_model"):
+    if not hasattr(anima_train_utils, "save_anima_model_on_epoch_end_or_stepwise"):
         return False
 
-    _original_save_sd_model = train_util.save_sd_model
+    _original_save_fn = anima_train_utils.save_anima_model_on_epoch_end_or_stepwise
 
+    # Signature: (args, on_epoch_end, accelerator, save_dtype, epoch,
+    #             num_train_epochs, global_step, dit)
     def _filtered_save(*args, **kwargs):
-        if _current_step_global in _save_points:
-            return _original_save_sd_model(*args, **kwargs)
+        global_step = kwargs.get("global_step", args[6] if len(args) > 6 else 0)
+        accelerator = kwargs.get("accelerator", args[2] if len(args) > 2 else None)
+
+        if global_step in _save_points:
+            _original_save_fn(*args, **kwargs)
+            # Save accelerator state at the 50% step for recovery
+            if (accelerator is not None
+                    and abs(global_step - _50p_step_global) <= 2):
+                logger.info("Saving accelerator state at step %d (50%%)", global_step)
+                accelerator.save_state()
         # Skip — not a configured save point
 
-    train_util.save_sd_model = _filtered_save
+    anima_train_utils.save_anima_model_on_epoch_end_or_stepwise = _filtered_save
     return True
 
 
 def _restore_save():
     """Restore original kohya-ss save function."""
-    global _original_save_sd_model
-    if _original_save_sd_model is not None:
+    global _original_save_fn
+    if _original_save_fn is not None:
         try:
-            import library.train_util as train_util
-            train_util.save_sd_model = _original_save_sd_model
+            from library import anima_train_utils
+            anima_train_utils.save_anima_model_on_epoch_end_or_stepwise = _original_save_fn
         except ImportError:
             pass
-        _original_save_sd_model = None
+        _original_save_fn = None
 
 
 # Shared step tracker (synced by _on_step callback)
@@ -358,16 +373,17 @@ def _build_kohya_args(params, kohya_parser):
     args.discrete_flow_shift = 1.0
     args.mixed_precision = p["mixed_precision"]
     args.max_train_steps = p["max_steps"]
-    # Disabled — we use monkey-patched save_sd_model for custom save points
-    args.save_every_n_steps = p["max_steps"]
+    # Checkpoints at 50%, 75% via monkey-patched save function.
+    # Small interval ensures all save points are hit; the patch filters to configured steps.
+    # State saved at 50% step inside the patch (for recovery). Final state save disabled.
+    args.save_every_n_steps = 10
+    args.save_state = False
     args.gradient_checkpointing = p.get("gradient_checkpointing", True)
     args.cache_latents = p.get("cache_latents", True)
     args.cache_text_encoder_outputs = p.get("cache_text_encoder", False)
     args.network_train_unet_only = p.get("cache_text_encoder", False)
     args.vae_chunk_size = 64
     args.vae_disable_cache = True
-    # Save accelerator state for resume support
-    args.save_state = True
     # Resume from existing state if provided
     resume_path = p.get("resume")
     if resume_path:
@@ -513,9 +529,10 @@ def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Pat
 
         train_util.verify_command_line_training_args(args)
 
-        # Setup custom save points (50%, 66%, 75%, 82.5%)
+        # Setup custom save points: checkpoints at 50%, 75%; state at 50%
         _save_points.clear()
         _save_points.update(_calculate_save_steps(params["max_steps"]))
+        _50p_step_global = max(1, int(round(params["max_steps"] * 0.5)))
         _setup_save_filter()
 
         if hasattr(args, "attn_mode") and args.attn_mode == "sdpa":
