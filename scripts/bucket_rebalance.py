@@ -301,16 +301,35 @@ def maybe_build_bucket_rebalance_subset(
         logger.debug("Bucket rebalance: no valid crop targets")
         return None
 
-    # Calculate per-subset repeats
-    non_dominant_count = total - dominant_count
+    # Determine how many images to crop
     crops_to_create = min(images_to_move, len(dominant_members))
+    non_dominant_count = total - dominant_count
+    # Sources are removed from dominant subset — they live only in crops
+    non_source_dom = dominant_count - crops_to_create
+
     r_nd = num_repeats
     r_c = num_repeats
-    max_r_d = (
-        (non_dominant_count * r_nd + crops_to_create * r_c) * dominance_threshold
-        / (dominant_count * (1 - dominance_threshold))
-    )
-    r_d = max(1, int(max_r_d))
+
+    # Solve for r_d so that: (non_source_dom * r_d) / total_eff = dominance_threshold
+    max_r_d = 1  # default — no clamping compensation needed
+    if non_source_dom > 0 and (1 - dominance_threshold) > 0:
+        max_r_d = (
+            (non_dominant_count * r_nd + crops_to_create * r_c) * dominance_threshold
+            / (non_source_dom * (1 - dominance_threshold))
+        )
+        r_d = max(1, int(max_r_d))
+    else:
+        # All dominant images are cropped away; give remaining repeats=1
+        r_d = 1
+
+    # If r_d was clamped to 1, compensate by boosting non-dominant repeats
+    if max_r_d < 1:
+        # Solve: dom * 1 / (dom * 1 + other * r_other) = threshold
+        other_count = non_dominant_count + crops_to_create
+        if other_count > 0 and (1 - dominance_threshold) > 0:
+            r_other = dominant_count * dominance_threshold / (other_count * (1 - dominance_threshold))
+            r_nd = max(r_nd, int(r_other))
+            r_c = max(r_c, int(r_other))
 
     dom_eff = dominant_count * r_d
     non_dom_eff = non_dominant_count * r_nd
@@ -319,10 +338,10 @@ def maybe_build_bucket_rebalance_subset(
     actual_share = dom_eff / total_eff * 100 if total_eff > 0 else 0
 
     logger.warning(
-        "Bucket rebalance: dominant %s at %.0f%% — "
-        "splitting into 3 subsets (dominant r=%d, others r=%d, %d crops)",
-        dominant_bucket, dominant_share * 100,
-        r_d, r_nd, crops_to_create,
+        "Bucket rebalance: dominant %s at %.0f%% (target <=%.0f%%) — "
+        "splitting into 3 subsets (dominant r=%d, others r=%d, crops r=%d, %d crops, effective share %.1f%%)",
+        dominant_bucket, dominant_share * 100, dominance_threshold * 100,
+        r_d, r_nd, r_c, crops_to_create, actual_share,
     )
 
     # Create subset directories
@@ -337,9 +356,12 @@ def maybe_build_bucket_rebalance_subset(
 
     rng = random.Random(seed)
     sources = rng.sample(dominant_members, crops_to_create)
+    sources_set = set(sources)
 
-    # Copy dominant images
+    # Copy dominant images (exclude sources — they live only in crops)
     for src in dominant_members:
+        if src in sources_set:
+            continue
         dst = dominant_dir / src.name
         shutil.copy2(str(src), str(dst))
         cap = src.with_suffix(".txt")
