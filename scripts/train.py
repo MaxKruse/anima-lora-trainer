@@ -265,6 +265,21 @@ def _calculate_save_steps(max_steps: int) -> list[int]:
     return [max(1, int(round(max_steps * p))) for p in percentages]
 
 
+def _compute_save_interval(max_steps: int) -> int:
+    """Compute a save interval that hits all configured save points.
+
+    Returns the GCD of (save_point_50p, save_point_75p, max_steps).
+    kohya-ss calls the save function at every N steps where N is this interval.
+    The monkey-patch then filters to only the configured save points.
+    """
+    from math import gcd
+    save_points = _calculate_save_steps(max_steps)
+    interval = max_steps
+    for sp in save_points:
+        interval = gcd(interval, sp)
+    return max(1, interval)
+
+
 def _cleanup_extra_checkpoints(output_dir: Path, lora_name: str, max_steps: int) -> None:
     """Remove checkpoint files that aren't at configured save points.
 
@@ -374,9 +389,10 @@ def _build_kohya_args(params, kohya_parser):
     args.mixed_precision = p["mixed_precision"]
     args.max_train_steps = p["max_steps"]
     # Checkpoints at 50%, 75% via monkey-patched save function.
-    # Small interval ensures all save points are hit; the patch filters to configured steps.
+    # Compute an interval (GCD of save points + max_steps) so kohya-ss calls the save
+    # function exactly at our configured steps — no extra saves to clean up.
     # State saved at 50% step inside the patch (for recovery). Final state save disabled.
-    args.save_every_n_steps = 10
+    args.save_every_n_steps = _compute_save_interval(p["max_steps"])
     args.save_state = False
     args.gradient_checkpointing = p.get("gradient_checkpointing", True)
     args.cache_latents = p.get("cache_latents", True)
