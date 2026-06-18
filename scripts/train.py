@@ -49,6 +49,7 @@ from scripts.dataset_toml import (
     generate_dataset_toml,
 )
 from scripts.validation import (
+    calculate_max_steps,
     calculate_repeats,
     check_validation,
     get_dataset_out_dir,
@@ -220,47 +221,6 @@ def _get_resume_info(perm_dir: Path, lora_name: str) -> dict:
     }
 
 
-def _scale_subset_repeats_to_target_epochs(
-    subset_configs: list[dict],
-    max_steps: int,
-    batch_size: int,
-    target_epochs: int,
-) -> tuple[list[dict], int]:
-    """Scale final subset repeats so configured epochs align with max_steps.
-
-    Preserves relative per-subset repeat ratios (e.g. bucket rebalance) by
-    applying one global multiplier across all subsets.
-    """
-    if not subset_configs:
-        return subset_configs, 1
-
-    effective_images = sum(
-        _count_images_in_dir(s["image_dir"]) * max(1, int(s.get("num_repeats", 1)))
-        for s in subset_configs
-    )
-    if effective_images <= 0:
-        return subset_configs, 1
-
-    repeat_scale = calculate_repeats(
-        effective_images,
-        max_steps=max_steps,
-        batch_size=batch_size,
-        target_epochs=target_epochs,
-    )
-
-    scaled_subsets = []
-    for subset in subset_configs:
-        base_repeat = max(1, int(subset.get("num_repeats", 1)))
-        scaled_subsets.append(
-            {
-                **subset,
-                "num_repeats": base_repeat * repeat_scale,
-            }
-        )
-
-    return scaled_subsets, repeat_scale
-
-
 # ── In-process training ──────────────────────────────────────────────────
 class _TqdmProgressWrapper(tqdm):
     """Wrapper around tqdm that tracks progress and checks for cancel signals."""
@@ -289,6 +249,93 @@ class _TqdmProgressWrapper(tqdm):
         return super().update(n)
 
 
+# ── Custom save points (monkey-patch kohya-ss) ──────────────────────────
+_save_points: set[int] = set()
+_original_save_sd_model = None
+
+
+def _calculate_save_steps(max_steps: int) -> list[int]:
+    """Calculate checkpoint save steps at specific percentages.
+
+    Saves at 50%, 66%, 75%, 82.5% of training (final 100% is handled by kohya-ss).
+    """
+    percentages = [0.50, 2/3, 0.75, 0.825]
+    return [max(1, int(round(max_steps * p))) for p in percentages]
+
+
+def _cleanup_extra_checkpoints(output_dir: Path, lora_name: str, max_steps: int) -> None:
+    """Remove checkpoint files that aren't at configured save points.
+
+    Keeps:
+      - Checkpoints at save point steps (e.g., {name}-step000250.safetensors)
+      - Final model ({name}.safetensors)
+      - State directories (for resume)
+    """
+    keep_steps = set(_calculate_save_steps(max_steps)) | {max_steps}
+    step_pattern = f"{lora_name}-step"
+
+    for entry in output_dir.iterdir():
+        name = entry.name
+        # Skip state directories, final model, non-model files
+        if name.endswith("-state") or name == f"{lora_name}.safetensors":
+            continue
+        if not name.startswith(step_pattern) or not name.endswith(".safetensors"):
+            continue
+        # Extract step number from {name}-step{NNNNNNNN}.safetensors
+        try:
+            step_str = name[len(step_pattern) : -len(".safetensors")]
+            step = int(step_str)
+            if step not in keep_steps:
+                entry.unlink()
+                logger.info("Removed extra checkpoint: %s", name)
+        except (ValueError, OSError):
+            pass
+
+
+def _setup_save_filter():
+    """Monkey-patch kohya-ss save_sd_model to only save at specific steps.
+
+    Kohya-ss only supports uniform save_every_n_steps intervals.
+    We patch the save function to only write checkpoints at our custom percentages.
+    Must be called after kohya-ss modules are imported.
+    """
+    global _original_save_sd_model
+
+    try:
+        import library.train_util as train_util
+    except ImportError:
+        return False
+
+    if not hasattr(train_util, "save_sd_model"):
+        return False
+
+    _original_save_sd_model = train_util.save_sd_model
+
+    def _filtered_save(*args, **kwargs):
+        if _current_step_global in _save_points:
+            return _original_save_sd_model(*args, **kwargs)
+        # Skip — not a configured save point
+
+    train_util.save_sd_model = _filtered_save
+    return True
+
+
+def _restore_save():
+    """Restore original kohya-ss save function."""
+    global _original_save_sd_model
+    if _original_save_sd_model is not None:
+        try:
+            import library.train_util as train_util
+            train_util.save_sd_model = _original_save_sd_model
+        except ImportError:
+            pass
+        _original_save_sd_model = None
+
+
+# Shared step tracker (synced by _on_step callback)
+_current_step_global = 0
+
+
 def _build_kohya_args(params, kohya_parser):
     """Build a full kohya-ss Namespace using parser defaults + overrides."""
     p = params
@@ -311,7 +358,8 @@ def _build_kohya_args(params, kohya_parser):
     args.discrete_flow_shift = 1.0
     args.mixed_precision = p["mixed_precision"]
     args.max_train_steps = p["max_steps"]
-    args.save_every_n_steps = max(1, p["max_steps"] // max(1, p.get("epochs", 2)))
+    # Disabled — we use monkey-patched save_sd_model for custom save points
+    args.save_every_n_steps = p["max_steps"]
     args.gradient_checkpointing = p.get("gradient_checkpointing", True)
     args.cache_latents = p.get("cache_latents", True)
     args.cache_text_encoder_outputs = p.get("cache_text_encoder", False)
@@ -368,8 +416,17 @@ def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Pat
         return {"status": "failed", "error": "No images found", "output_dir": str(output_dir)}
 
     total_images = sum(s["num_images"] for s in subsets)
+    batch_size = params.get("batch_size", 4)
+
+    # Auto-calculate max_steps from batch_size (unless user explicitly set a different value)
+    auto_max = calculate_max_steps(batch_size)
+    if params.get("max_steps", auto_max) == DEFAULTS["max_steps"]:
+        params["max_steps"] = auto_max
+
     manual_repeats = params.get("repeats")
-    base_repeats = manual_repeats if manual_repeats is not None else 1
+
+    # Auto-calculate repeats: target ~12 steps_per_epoch (10-15 range)
+    base_repeats = manual_repeats if manual_repeats is not None else calculate_repeats(total_images, batch_size)
 
     subset_configs = [{"image_dir": s["image_dir"], "num_repeats": base_repeats} for s in subsets]
 
@@ -387,24 +444,14 @@ def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Pat
     if rebalance_subsets is not None:
         subset_configs = rebalance_subsets
 
-    # Final step before writing dataset TOML: scale repeats to target epochs.
-    if manual_repeats is None:
-        subset_configs, repeat_scale = _scale_subset_repeats_to_target_epochs(
-            subset_configs=subset_configs,
-            max_steps=params.get("max_steps", 800),
-            batch_size=params.get("batch_size", 4),
-            target_epochs=params.get("epochs", 2),
-        )
-        num_repeats = repeat_scale
-    else:
-        num_repeats = manual_repeats
+    num_repeats = base_repeats
 
     # Generate dataset TOML
     dataset_toml_path = output_dir / "dataset.toml"
     generate_dataset_toml(
         batch_size=params["batch_size"],
         num_images=total_images,
-        epochs=params.get("epochs", 2),
+        epochs=4,  # unused by toml generator, kept for API compat
         num_repeats=num_repeats,
         output_path=str(dataset_toml_path),
         resolution=params.get("resolution", 1024),
@@ -437,7 +484,9 @@ def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Pat
 
     def _on_step(step, bar):
         nonlocal current_step, total_steps, avg_loss
+        global _current_step_global
         current_step = step
+        _current_step_global = step
         total_steps = bar.total if bar.total else total_steps
         if hasattr(bar, "format_dict") and "avr_loss" in bar.format_dict:
             avg_loss = round(float(bar.format_dict["avr_loss"]), 6)
@@ -464,6 +513,11 @@ def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Pat
 
         train_util.verify_command_line_training_args(args)
 
+        # Setup custom save points (50%, 66%, 75%, 82.5%)
+        _save_points.clear()
+        _save_points.update(_calculate_save_steps(params["max_steps"]))
+        _setup_save_filter()
+
         if hasattr(args, "attn_mode") and args.attn_mode == "sdpa":
             args.attn_mode = "torch"
 
@@ -479,6 +533,16 @@ def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Pat
         logger.debug("Traceback:\n%s", traceback.format_exc())
         exit_code = 1
     finally:
+        # Restore original kohya-ss save function
+        _restore_save()
+        _save_points.clear()
+
+        # Clean up extra checkpoint files (keep only save points + final model)
+        try:
+            _cleanup_extra_checkpoints(output_dir, params["lora_name"], params["max_steps"])
+        except Exception:
+            pass
+
         manifest["current_step"] = current_step
         manifest["total_steps"] = total_steps
         manifest["avg_loss"] = avg_loss
@@ -569,7 +633,6 @@ def _run_matrix(args, dataset_path, lora_name):
         "learning_rate": float(all_param_ranges["learning_rate"][0]),
         "batch_size": int(all_param_ranges["batch_size"][0]),
         "max_steps": int(all_param_ranges["max_steps"][0]),
-        "epochs": int(all_param_ranges["epochs"][0]),
         "optimizer": str(all_param_ranges["optimizer"][0]),
         "scheduler": str(all_param_ranges["scheduler"][0]),
         "resolution": int(all_param_ranges["resolution"][0]),
@@ -733,7 +796,6 @@ def main():
         _first_int = lambda v: int(str(v).split(",")[0])
         valid, warnings = validate_dataset(
             dataset,
-            max_steps=_first_int(args.max_steps),
             batch_size=_first_int(args.batch_size),
         )
         if warnings:

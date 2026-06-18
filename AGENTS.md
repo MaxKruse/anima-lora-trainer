@@ -24,9 +24,8 @@ Python CLI tool for training Anima character LoRA models. Runs kohya-ss training
 | network_dim | 20 |
 | network_alpha | 1 |
 | learning_rate | 0.0002 |
-| epochs | 2 |
 | batch_size | 4 |
-| max_steps | 800 |
+| max_steps | 500 (auto from batch_size: bs=4→500, bs=2→750, bs=1→1000) |
 | resolution | 1024 |
 | optimizer | AdamW8Bit |
 | scheduler | cosine |
@@ -35,7 +34,9 @@ Python CLI tool for training Anima character LoRA models. Runs kohya-ss training
 | caption_tag_dropout_rate | 0.1 |
 | keep_tokens | 1 |
 
-Save interval is `max_steps // epochs` (e.g., 800 steps / 4 epochs = save every 200 steps).
+**Auto repeats**: calculated so `(num_images × repeats) / batch_size` falls in the 10-15 range (target ~12 steps per epoch). Override with `--repeats`.
+
+**Checkpoints**: saved at 50%, 66%, 75%, 82.5%, and 100% of training (final model always saved).
 
 ## Python Environment
 

@@ -94,28 +94,41 @@ def write_validation_marker(
     return marker_path
 
 
+def calculate_max_steps(batch_size: int = 4) -> int:
+    """Calculate auto max_steps based on batch size.
+
+    Higher batch sizes converge faster, so they need fewer total steps.
+      batch_size=4 -> max_steps=500
+      batch_size=2 -> max_steps=750
+      batch_size=1 -> max_steps=1000
+    """
+    return {
+        4: 500,
+        2: 750,
+        1: 1000,
+    }.get(batch_size, 500)
+
+
 def calculate_repeats(
     num_images: int,
-    max_steps: int = 800,
     batch_size: int = 4,
-    target_epochs: int = 4,
+    target_steps_per_epoch: int = 12,
 ) -> int:
-    """Calculate num_repeats to reach a target epoch count.
+    """Calculate num_repeats so that (num_images * repeats) / batch_size falls in 10-15 range.
+
+    The target is ~12 steps per epoch (midpoint of 10-15).
 
     Derivation:
-      steps_per_epoch ~= (num_images * num_repeats) / batch_size
-      target_epochs ~= max_steps / steps_per_epoch
-      num_repeats ~= (max_steps * batch_size) / (num_images * target_epochs)
+      steps_per_epoch = (num_images * num_repeats) / batch_size
+      num_repeats = (target_steps_per_epoch * batch_size) / num_images
     """
-    if num_images <= 0 or max_steps <= 0 or batch_size <= 0 or target_epochs <= 0:
+    if num_images <= 0 or batch_size <= 0:
         return 1
-    samples_per_epoch_needed = (max_steps * batch_size) / target_epochs
-    return max(1, math.ceil(samples_per_epoch_needed / num_images))
+    return max(1, math.ceil((target_steps_per_epoch * batch_size) / num_images))
 
 
 def validate_dataset(
     image_dir: str,
-    max_steps: int = 800,
     batch_size: int = 4,
 ) -> tuple[bool, list[str]]:
     """Validate a training dataset.
@@ -211,7 +224,8 @@ def validate_dataset(
         warnings.append(msg)
 
     # Write validation marker
-    params = {"max_steps": max_steps, "batch_size": batch_size}
+    auto_max_steps = calculate_max_steps(batch_size)
+    params = {"max_steps": auto_max_steps, "batch_size": batch_size}
     marker_path = write_validation_marker(
         image_dir, subsets, params, warnings
     )
