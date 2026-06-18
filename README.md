@@ -82,18 +82,15 @@ uv run .\scripts\train.py --mode matrix --dataset .\datasets\froot\img --name Fr
 
 This generates 3 × 3 × 2 = **18 training runs**.
 
-**Resume** an interrupted matrix run:
-```bash
-uv run .\scripts\train.py --mode matrix --resume --dataset .\datasets\froot\img --name Froot --network-dim 16,20,32 --alpha 1,20
-```
+**Auto-resume**: Interrupted matrix runs automatically resume on next invocation — completed permutations are skipped, incomplete runs pick up from the latest accelerator state.
 
 **Cancel** a running job:
 ```bash
-# Single mode: touch the cancel file in jobs/
-echo > jobs/job-<timestamp>-<id>.cancel
+# Single mode: touch the cancel file
+echo > jobs/<lora-name>.cancel
 
-# Matrix mode: touch cancel in the output dir
-echo > datasets/<name>/out/job-<timestamp>-<id>/cancel
+# Matrix mode: cancel a specific permutation
+echo > jobs/matrix-<idx>.cancel
 ```
 
 ## CLI Reference
@@ -129,13 +126,14 @@ All accept comma-separated values in matrix mode.
 | `--learning-rate`, `--lr` | 0.0002 | Learning rate |
 | `--batch-size`, `--bs` | 4 | Training batch size |
 | `--max-steps`, `--ss` | 800 | Max training steps |
+| `--epochs` | 2 | Number of epochs (checkpoint interval = max_steps / epochs) |
 | `--optimizer` | AdamW8Bit | Optimizer type |
 | `--scheduler`, `-s` | cosine | LR scheduler |
 | `--resolution` | 1024 | Image resolution (768–1024) |
 | `--repeats`, `-r` | auto | Override num_repeats (auto from image count) |
 | `--mixed-precision` | bf16 | fp16 / bf16 / no |
 | `--timestep-sampling` | sigmoid | sigma / uniform / sigmoid / shift / flux_shift |
-| `--caption-dropout` | 0.05 | Caption tag dropout rate (0.0–1.0) |
+| `--caption-dropout` | 0.1 | Caption tag dropout rate (0.0–1.0) |
 | `--keep-tokens` | 1 | Keep first N tokens from caption shuffle |
 | `--no-gradient-checkpointing` | off | Disable gradient checkpointing |
 | `--no-cache-latents` | off | Disable latent caching |
@@ -149,7 +147,7 @@ All accept comma-separated values in matrix mode.
 
 | Flag | Description |
 |------|-------------|
-| `--resume` | Resume from existing manifest (skip completed permutations) |
+| `--resume` | Explicit resume flag (auto-resume is default — completed perms are always skipped) |
 
 ## Default Parameters (Proven Recipe)
 
@@ -160,30 +158,44 @@ These defaults come from successful training runs on real character datasets:
 | `network_dim` | 20 | Sweet spot for character detail (16–32 range) |
 | `network_alpha` | 1 | Effective scale 0.05 — lets you prompt detail in/out |
 | `learning_rate` | 0.0002 | Aggressive but stable with cosine decay |
+| `epochs` | 2 | Balanced coverage without overfitting |
 | `batch_size` | 4 | Balanced gradient signal vs VRAM (~17GB) |
-| `max_steps` | 800 | Enough for convergence, checkpoints every 80 steps |
+| `max_steps` | 800 | Enough for convergence, checkpoints every 400 steps (800/2) |
 | `optimizer` | AdamW8Bit | Memory-efficient, no convergence sacrifice |
 | `scheduler` | cosine | Smooth decay from peak LR to near-zero |
 | `mixed_precision` | bf16 | Required for Anima/Qwen3 |
 | `timestep_sampling` | sigmoid | Focuses on mid-to-high noise levels |
-| `caption_tag_dropout` | 0.05 | 5% random tag drops → better generalization |
+| `caption_tag_dropout` | 0.1 | 10% random tag drops → better generalization |
 | `keep_tokens` | 1 | Preserves trigger word from caption shuffle |
 
 ## Output Structure
 
+Single run output:
 ```
-datasets/froot/out/job-1781162746594-khr542/
-  dataset.toml              ← generated dataset config
-  job_manifest.json         ← progress/status
-  Froot-Anima-step00000080.safetensors
-  Froot-Anima-step00000160.safetensors
-  ...
-  Froot-Anima-step00000800.safetensors
-  Froot-Anima.safetensors   ← final checkpoint
-  training-data.zip         ← backup of training data
+datasets/froot/out/
+  .work/
+    dataset.toml              ← generated dataset config
+    job_manifest.json         ← progress/status
+    Froot-Anima-step00000400.safetensors
+    Froot-Anima-step00000800.safetensors
+    Froot-Anima.safetensors   ← final checkpoint
+    Froot-Anima-state/        ← accelerator state (for resume)
+    training-data.zip         ← backup of training data
+  Froot-Anima.safetensors     ← copied final model
 ```
 
-Matrix runs create one top-level `manifest.json` and subdirectories per permutation.
+Matrix runs create subdirectories per permutation and a top-level `manifest.json`:
+```
+datasets/froot/out/
+  manifest.json               ← overall matrix manifest
+  lr-0.0001xsteps-800/        ← permutation working dir
+  lr-0.0001xsteps-1200/
+  lr-0.0002xsteps-800/
+  lr-0.0002xsteps-1200/
+  Froot-Anima-lr-0.0001-steps-800.safetensors  ← copied final models
+  Froot-Anima-lr-0.0001-steps-1200.safetensors
+  ...
+```
 
 ## Project Structure
 
@@ -214,4 +226,6 @@ tests/                      ← test suite
 - A full kohya argument namespace is built from upstream defaults, then wrapper values override
 - `--validate` writes a `.validation.json` marker — training checks for this before starting
 - `--rebalance-buckets` detects when one aspect-ratio bucket dominates and redistributes via random-crop augmentation into adjacent buckets
+- Checkpoint interval is `max_steps // epochs` (e.g., 800 steps / 2 epochs = save every 400 steps)
+- Auto-resume: incomplete runs are detected via `job_manifest.json` status and accelerator state dirs
 - Progress is tracked via `job_manifest.json` (single mode) or `manifest.json` (matrix mode)

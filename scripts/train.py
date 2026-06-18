@@ -311,7 +311,7 @@ def _build_kohya_args(params, kohya_parser):
     args.discrete_flow_shift = 1.0
     args.mixed_precision = p["mixed_precision"]
     args.max_train_steps = p["max_steps"]
-    args.save_every_n_steps = max(1, p["max_steps"] // 10)
+    args.save_every_n_steps = max(1, p["max_steps"] // max(1, p.get("epochs", 2)))
     args.gradient_checkpointing = p.get("gradient_checkpointing", True)
     args.cache_latents = p.get("cache_latents", True)
     args.cache_text_encoder_outputs = p.get("cache_text_encoder", False)
@@ -569,6 +569,7 @@ def _run_matrix(args, dataset_path, lora_name):
         "learning_rate": float(all_param_ranges["learning_rate"][0]),
         "batch_size": int(all_param_ranges["batch_size"][0]),
         "max_steps": int(all_param_ranges["max_steps"][0]),
+        "epochs": int(all_param_ranges["epochs"][0]),
         "optimizer": str(all_param_ranges["optimizer"][0]),
         "scheduler": str(all_param_ranges["scheduler"][0]),
         "resolution": int(all_param_ranges["resolution"][0]),

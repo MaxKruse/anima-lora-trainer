@@ -98,6 +98,12 @@ Examples:
         help=f"Max training step(s) [default: {DEFAULTS['max_steps']}] (comma-sep for matrix)",
     )
     parser.add_argument(
+        "--epochs",
+        type=str,
+        default=str(DEFAULTS["epochs"]),
+        help=f"Number of epochs [default: {DEFAULTS['epochs']}] (saves every max_steps/epochs, comma-sep for matrix)",
+    )
+    parser.add_argument(
         "--optimizer",
         type=str,
         default=DEFAULTS["optimizer"],
@@ -225,6 +231,7 @@ def parse_params(args) -> dict:
         "learning_rate": float(args.learning_rate),
         "batch_size": int(args.batch_size),
         "max_steps": int(args.max_steps),
+        "epochs": int(args.epochs),
         "optimizer": args.optimizer,
         "scheduler": args.scheduler,
         "resolution": int(args.resolution),
@@ -256,6 +263,7 @@ def parse_param_ranges(args, include_single: bool = False) -> dict:
         ("learning_rate", args.learning_rate),
         ("batch_size", args.batch_size),
         ("max_steps", args.max_steps),
+        ("epochs", args.epochs),
         ("optimizer", args.optimizer),
         ("scheduler", args.scheduler),
         ("resolution", args.resolution),
