@@ -142,6 +142,84 @@ def _count_images_in_dir(image_dir: str) -> int:
     )
 
 
+def _find_latest_state_dir(perm_dir: Path, lora_name: str) -> Path | None:
+    """Find the latest accelerator state directory for resume.
+
+    kohya-ss saves state dirs like:
+      {output_dir}/{output_name}-step{NNNNNNNN}-state/
+      {output_dir}/{output_name}-state/  (final)
+
+    Returns the path to the latest state dir, or None if not found.
+    """
+    if not perm_dir.exists():
+        return None
+
+    # Look for step-based state dirs: {lora_name}-step{NNNNNNNN}-state
+    pattern_prefix = f"{lora_name}-step"
+    suffix = "-state"
+    state_dirs = [
+        d for d in perm_dir.iterdir()
+        if d.is_dir()
+        and d.name.startswith(pattern_prefix)
+        and d.name.endswith(suffix)
+    ]
+    if state_dirs:
+        # Sort by name (step number is zero-padded, so lexicographic works)
+        state_dirs.sort(key=lambda d: d.name)
+        return state_dirs[-1]
+
+    # Fallback: final state dir
+    final_state = perm_dir / f"{lora_name}-state"
+    if final_state.is_dir():
+        return final_state
+
+    return None
+
+
+def _is_incomplete(perm_dir: Path) -> bool:
+    """Check if a permutation run is incomplete (has no final model)."""
+    manifest = perm_dir / "job_manifest.json"
+    if not manifest.exists():
+        return False
+    try:
+        data = json.loads(manifest.read_text())
+        status = data.get("status", "")
+        # "running" means aborted mid-run, "failed"/"cancelled" are incomplete
+        return status in ("running", "failed", "cancelled")
+    except (json.JSONDecodeError, OSError):
+        return False
+
+
+def _get_resume_info(perm_dir: Path, lora_name: str) -> dict:
+    """Get resume info for an incomplete run.
+
+    Returns dict with:
+      - incomplete: bool
+      - current_step: int
+      - total_steps: int
+      - state_dir: Path | None
+    """
+    manifest = perm_dir / "job_manifest.json"
+    if not manifest.exists():
+        return {"incomplete": False, "current_step": 0, "total_steps": 0, "state_dir": None}
+
+    try:
+        data = json.loads(manifest.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {"incomplete": False, "current_step": 0, "total_steps": 0, "state_dir": None}
+
+    status = data.get("status", "")
+    incomplete = status in ("running", "failed", "cancelled")
+    state_dir = _find_latest_state_dir(perm_dir, lora_name) if incomplete else None
+
+    return {
+        "incomplete": incomplete,
+        "current_step": data.get("current_step", 0),
+        "total_steps": data.get("total_steps", 0),
+        "state_dir": state_dir,
+    }
+
+
 def _scale_subset_repeats_to_target_epochs(
     subset_configs: list[dict],
     max_steps: int,
@@ -240,6 +318,12 @@ def _build_kohya_args(params, kohya_parser):
     args.network_train_unet_only = p.get("cache_text_encoder", False)
     args.vae_chunk_size = 64
     args.vae_disable_cache = True
+    # Save accelerator state for resume support
+    args.save_state = True
+    # Resume from existing state if provided
+    resume_path = p.get("resume")
+    if resume_path:
+        args.resume = str(resume_path)
     return args
 
 
@@ -261,7 +345,7 @@ def _reset_kohya_global_state() -> None:
         pass
 
 
-def run_single_training(params: dict, output_dir: Path, job_id: str) -> dict:
+def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Path | None = None) -> dict:
     """Run a single training job in-process."""
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "job_manifest.json"
@@ -343,6 +427,7 @@ def run_single_training(params: dict, output_dir: Path, job_id: str) -> dict:
         sys.path.insert(0, sd_scripts_dir)
     _reset_kohya_global_state()
     params["dataset_config"] = str(dataset_toml_path)
+    params["resume"] = str(resume) if resume else None
 
     current_step = 0
     total_steps = params.get("max_steps", 800)
@@ -435,9 +520,27 @@ def _run_single(args, dataset_path, lora_name):
     })
 
     (_project_root / "jobs").mkdir(exist_ok=True)
+
+    # Auto-resume: check for incomplete run
+    resume_path = None
+    resume_info = _get_resume_info(work_dir, lora_name)
+    if resume_info["incomplete"]:
+        if resume_info["state_dir"]:
+            resume_path = resume_info["state_dir"]
+            logger.info(
+                "Resuming from step %d/%d (state: %s)",
+                resume_info["current_step"], resume_info["total_steps"],
+                resume_path.name,
+            )
+        else:
+            logger.warning(
+                "Incomplete run (step %d/%d) but no state dir found — restarting",
+                resume_info["current_step"], resume_info["total_steps"],
+            )
+
     logger.info("Starting training: %s", lora_name)
 
-    result = run_single_training(params, work_dir, lora_name)
+    result = run_single_training(params, work_dir, lora_name, resume=resume_path)
     if result["status"] == "completed":
         _copy_final_model(work_dir, output_base, lora_name, {})
         print(f"\n\u2713 Training completed -> {output_base / (lora_name + '.safetensors')}")
@@ -489,30 +592,93 @@ def _run_matrix(args, dataset_path, lora_name):
     })
 
     manifest_path = output_base / "manifest.json"
-    manifest = {
-        "mode": "matrix",
-        "param_ranges": {k: list(v) for k, v in param_ranges.items()},
-        "total": len(permutations),
-        "completed": 0,
-        "failed": 0,
-        "cancelled": 0,
-        "permutations": [
-            {"params": perm, "status": "pending", "output_dir": None, "error": None}
-            for perm in permutations
-        ],
-    }
+
+    # Load existing manifest if resuming or if one exists (auto-resume)
+    existing_manifest = None
+    if manifest_path.exists():
+        try:
+            existing_manifest = json.loads(manifest_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    if existing_manifest is not None:
+        manifest = existing_manifest
+        logger.info("Loaded existing manifest: %d completed, %d failed, %d total",
+                     manifest.get("completed", 0), manifest.get("failed", 0), manifest.get("total", 0))
+    else:
+        manifest = {
+            "mode": "matrix",
+            "param_ranges": {k: list(v) for k, v in param_ranges.items()},
+            "total": len(permutations),
+            "completed": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "permutations": [
+                {"params": perm, "status": "pending", "output_dir": None, "error": None}
+                for perm in permutations
+            ],
+        }
 
     (_project_root / "jobs").mkdir(exist_ok=True)
-    _write_json(manifest_path, manifest)
 
-    completed = failed = 0
+    # Count already-completed from existing manifest
+    completed = manifest.get("completed", 0)
+    failed = manifest.get("failed", 0)
+    cancelled = manifest.get("cancelled", 0)
+
+    # Build a set of completed perm names for quick lookup
+    completed_perms = set()
+    for entry in manifest.get("permutations", []):
+        if entry.get("status") == "completed":
+            perm_key = "x".join(f"{k}-{v}" for k, v in entry["params"].items())
+            completed_perms.add(perm_key)
+
+    # Check for incomplete runs and auto-resume
+    has_incomplete = any(
+        _is_incomplete(output_base / "x".join(f"{k}-{v}" for k, v in perm.items()))
+        for perm in permutations
+    )
+    if has_incomplete:
+        logger.info("Detected incomplete runs — will auto-resume")
+
+    run_idx = 0
+    total_to_run = sum(
+        1 for perm in permutations
+        if "x".join(f"{k}-{v}" for k, v in perm.items()) not in completed_perms
+    )
 
     for idx, perm in enumerate(permutations):
         perm_parts = [f"{k}-{v}" for k, v in perm.items()]
         perm_name = "x".join(perm_parts)
         perm_dir = output_base / perm_name
 
-        print(f"\n[{idx + 1}/{len(permutations)}] {perm_name}")
+        # Skip already-completed permutations
+        if perm_name in completed_perms:
+            manifest["permutations"][idx]["status"] = "completed"
+            continue
+
+        # Check for incomplete run and find resume path
+        resume_info = _get_resume_info(perm_dir, lora_name)
+        resume_path = None
+        if resume_info["incomplete"]:
+            if resume_info["state_dir"]:
+                resume_path = resume_info["state_dir"]
+                logger.info(
+                    "Resuming %s from step %d/%d (state: %s)",
+                    perm_name, resume_info["current_step"],
+                    resume_info["total_steps"], resume_path.name,
+                )
+            else:
+                logger.warning(
+                    "Incomplete run %s (step %d/%d) but no state dir found — restarting",
+                    perm_name, resume_info["current_step"],
+                    resume_info["total_steps"],
+                )
+
+        run_idx += 1
+        print(f"\n[{run_idx}/{total_to_run}] {perm_name}")
+        if resume_path:
+            print(f"  \u21bb Resuming from {resume_path.name}")
 
         run_params = {**base_params, **perm}
         run_params["output_dir"] = str(perm_dir)
@@ -522,7 +688,7 @@ def _run_matrix(args, dataset_path, lora_name):
         _write_json(manifest_path, manifest)
 
         try:
-            result = run_single_training(run_params, perm_dir, f"matrix-{idx}")
+            result = run_single_training(run_params, perm_dir, f"matrix-{idx}", resume=resume_path)
             if result["status"] == "completed":
                 manifest["permutations"][idx]["status"] = "completed"
                 manifest["completed"] += 1
@@ -562,10 +728,12 @@ def main():
     # Validate mode
     if args.validate:
         dataset = ensure_dataset(args)
+        # Handle comma-separated matrix params — use first value for validation
+        _first_int = lambda v: int(str(v).split(",")[0])
         valid, warnings = validate_dataset(
             dataset,
-            max_steps=int(args.max_steps),
-            batch_size=int(args.batch_size),
+            max_steps=_first_int(args.max_steps),
+            batch_size=_first_int(args.batch_size),
         )
         if warnings:
             print(f"\n  ({len(warnings)} warning(s) — training is still allowed)")
