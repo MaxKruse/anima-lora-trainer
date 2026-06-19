@@ -474,7 +474,13 @@ def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Pat
         resolution=params.get("resolution", 1024),
     )
     if rebalance_subsets is not None:
+        logger.info("Bucket rebalance: using %d rebalanced subsets", len(rebalance_subsets))
+        for i, sub in enumerate(rebalance_subsets):
+            img_count = _count_images_in_dir(sub["image_dir"])
+            logger.info("  subset %d: %s (%d images, repeats=%d)", i, Path(sub["image_dir"]).name, img_count, sub["num_repeats"])
         subset_configs = rebalance_subsets
+    else:
+        logger.info("Bucket rebalance: skipped — using original subsets")
 
     num_repeats = base_repeats
 

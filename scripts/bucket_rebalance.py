@@ -265,8 +265,10 @@ def maybe_build_bucket_rebalance_subset(
     Returns list of subset dicts (ready for dataset TOML), or None.
     """
     if not enabled:
+        logger.info("Bucket rebalance: not requested (pass --rebalance-buckets to enable)")
         return None
 
+    logger.info("Bucket rebalance: scanning images for bucket distribution...")
     bucket_counts, bucket_members, skipped = collect_bucket_members(
         training_images, resolution=resolution,
     )
@@ -274,31 +276,44 @@ def maybe_build_bucket_rebalance_subset(
         logger.debug("Bucket check skipped %d unreadable image(s)", skipped)
 
     if len(bucket_counts) < 3:
+        logger.info(
+            "Bucket rebalance: only %d bucket(s) found — need at least 3 to rebalance. "
+            "Buckets: %s",
+            len(bucket_counts),
+            ", ".join(f"{b}: {c}" for b, c in sorted(bucket_counts.items(), key=lambda x: -x[1])),
+        )
         return None
     total = sum(bucket_counts.values())
     if total <= 0:
+        logger.info("Bucket rebalance: no images found")
         return None
 
     dominant_bucket, dominant_count = max(bucket_counts.items(), key=lambda x: x[1])
     dominant_share = dominant_count / total
     if dominant_share <= dominance_threshold:
-        logger.debug("Bucket distribution within threshold — no rebalance needed")
+        logger.info(
+            "Bucket rebalance: distribution OK — dominant bucket %s at %.1f%% "
+            "(threshold %.1f%%). No rebalance needed.",
+            dominant_bucket, dominant_share * 100, dominance_threshold * 100,
+        )
         return None
 
     needed = max(0, math.ceil(dominant_count / dominance_threshold - total))
     images_to_move = min(dominant_count, max_augmented_images, max(1, needed))
     if images_to_move <= 0:
+        logger.info("Bucket rebalance: calculated 0 images to move — skipping")
         return None
 
     dominant_members = bucket_members.get(dominant_bucket, [])
     if not dominant_members:
+        logger.info("Bucket rebalance: no source images in dominant bucket %s — skipping", dominant_bucket)
         return None
 
     crop_targets = _find_crop_targets(
         dominant_bucket, dominant_members, set(bucket_counts.keys()),
     )
     if not crop_targets:
-        logger.debug("Bucket rebalance: no valid crop targets")
+        logger.info("Bucket rebalance: no valid crop targets found for dominant bucket %s — skipping", dominant_bucket)
         return None
 
     # Determine how many images to crop
@@ -401,7 +416,7 @@ def maybe_build_bucket_rebalance_subset(
         generated += 1
 
     if generated == 0:
-        logger.debug("Bucket rebalance: no cropped samples generated")
+        logger.info("Bucket rebalance: no cropped samples generated — skipping")
         shutil.rmtree(rebalance_base, ignore_errors=True)
         return None
 
