@@ -1,0 +1,10 @@
+{
+  "model": "",
+  "encoder": "",
+  "vae": "",
+  "negative_prompt": "lowres, bad anatomy, bad hands, extra fingers, fewer fingers, cropped, worst quality, low quality",
+  "steps": 20,
+  "cfg_scale": 7.0,
+  "seed": 42,
+  "sampler": "euler_a"
+}

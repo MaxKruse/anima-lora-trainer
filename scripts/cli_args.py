@@ -5,7 +5,7 @@ Handles argument definition, parsing, and conversion to training params.
 
 import argparse
 import sys
-from scripts.constants import DEFAULTS
+from scripts.constants import DEFAULTS, DEFAULT_EVAL_CONFIG
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -189,6 +189,19 @@ Examples:
         "--resume",
         action="store_true",
         help="(Matrix mode) Resume from existing manifest",
+    )
+
+    # Evaluation
+    parser.add_argument(
+        "--evaluate",
+        action="store_true",
+        help="Run sd.cpp inference on all trained LoRAs after training completes",
+    )
+    parser.add_argument(
+        "--eval-config",
+        type=str,
+        default=DEFAULT_EVAL_CONFIG,
+        help=f"Path to eval config JSON [default: {DEFAULT_EVAL_CONFIG}]",
     )
 
     return parser

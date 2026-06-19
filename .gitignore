@@ -15,6 +15,9 @@ build/
 # env files
 .env*
 
+# user eval config (keep example tracked)
+eval.config.json
+
 # IDE
 .vscode/
 .idea/

@@ -56,6 +56,11 @@ from scripts.validation import (
     get_dataset_out_dir,
     validate_dataset,
 )
+from scripts.evaluation import (
+    load_eval_config,
+    pick_caption,
+    run_evaluation,
+)
 from scripts.zip_training_data import zip_training_data
 
 logger = logging.getLogger(__name__)
@@ -647,6 +652,12 @@ def _run_single(args, dataset_path, lora_name):
     if result["status"] == "completed":
         _copy_final_model(work_dir, output_base, lora_name, {})
         print(f"\n\u2713 Training completed -> {output_base / (lora_name + '.safetensors')}")
+
+        # Post-training evaluation
+        if args.evaluate:
+            print(f"\n--- Running evaluation ---")
+            eval_config = load_eval_config(args.eval_config)
+            run_evaluation(eval_config, str(dataset_path), str(work_dir))
     else:
         print(f"\n\u2717 Training {result['status']}: exit code {result.get('exit_code')}", file=sys.stderr)
         sys.exit(1)
@@ -665,6 +676,13 @@ def _run_matrix(args, dataset_path, lora_name):
 
     permutations = generate_permutations(param_ranges)
 
+    # Load eval config and pick shared caption if --evaluate is set
+    eval_config = None
+    eval_caption = None
+    if args.evaluate:
+        eval_config = load_eval_config(args.eval_config)
+        eval_caption = pick_caption(str(dataset_path))
+        logger.info("Eval caption (shared across matrix): %s", eval_caption[:80])
 
     base_params = {
         "network_dim": int(all_param_ranges["network_dim"][0]),
@@ -798,6 +816,11 @@ def _run_matrix(args, dataset_path, lora_name):
                 completed += 1
                 _copy_final_model(perm_dir, output_base, lora_name, perm)
                 print(f"  \u2713 {perm_name}")
+
+                # Post-training evaluation for this permutation
+                if eval_config is not None:
+                    print(f"  --- Running evaluation for {perm_name} ---")
+                    run_evaluation(eval_config, str(dataset_path), str(perm_dir), caption=eval_caption)
             else:
                 err_detail = result.get("error") or f"exit code {result.get('exit_code', 'unknown')}"
                 error = f"exit code {result.get('exit_code', 'unknown')}"
