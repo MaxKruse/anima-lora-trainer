@@ -18,6 +18,7 @@ import time
 import traceback
 from itertools import product
 from pathlib import Path
+from typing import Any
 
 from tqdm import tqdm
 
@@ -71,7 +72,7 @@ logging.basicConfig(
 )
 
 
-def _write_json(path: Path, data: dict) -> None:
+def _write_json(path: Path, data: dict[str, Any]) -> None:
     """Atomic JSON write."""
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2))
@@ -86,7 +87,7 @@ def generate_job_id() -> str:
     return f"job-{ts}-{suffix}"
 
 
-def generate_permutations(param_dict: dict) -> list[dict]:
+def generate_permutations(param_dict: dict[str, list[Any]]) -> list[dict[str, Any]]:
     """Generate Cartesian product of parameter lists."""
     if not param_dict:
         return [{}]
@@ -95,7 +96,7 @@ def generate_permutations(param_dict: dict) -> list[dict]:
     return [dict(zip(keys, combo)) for combo in product(*values)]
 
 
-def build_output_dir(dataset_dir: str, output_base) -> Path:
+def build_output_dir(dataset_dir: str, output_base: str | None) -> Path:
     """Build the output directory path (no job_id nesting)."""
     dataset_dir_path = Path(dataset_dir).resolve()
     if output_base:
@@ -106,9 +107,9 @@ def build_output_dir(dataset_dir: str, output_base) -> Path:
     return datasets_parent / "out"
 
 
-def _perm_suffix(perm: dict) -> str:
+def _perm_suffix(perm: dict[str, Any]) -> str:
     """Build a short filename suffix from permutation params, e.g. 'lr-0.0001-bs-2'."""
-    aliases = {
+    aliases: dict[str, str] = {
         "learning_rate": "lr",
         "batch_size": "bs",
         "network_dim": "dim",
@@ -118,14 +119,14 @@ def _perm_suffix(perm: dict) -> str:
         "scheduler": "sched",
         "resolution": "res",
     }
-    parts = []
+    parts: list[str] = []
     for k, v in perm.items():
         short = aliases.get(k, k)
         parts.append(f"{short}-{v}")
     return "-".join(parts)
 
 
-def _copy_final_model(perm_dir: Path, output_base: Path, lora_name: str, perm: dict) -> None:
+def _copy_final_model(perm_dir: Path, output_base: Path, lora_name: str, perm: dict[str, Any]) -> None:
     """Copy the final .safetensors from a working dir to the output folder."""
     final_model = perm_dir / f"{lora_name}.safetensors"
     if not final_model.exists():
@@ -197,7 +198,7 @@ def _is_incomplete(perm_dir: Path) -> bool:
         return False
 
 
-def _get_resume_info(perm_dir: Path, lora_name: str) -> dict:
+def _get_resume_info(perm_dir: Path, lora_name: str) -> dict[str, Any]:
     """Get resume info for an incomplete run.
 
     Returns dict with:
@@ -229,20 +230,27 @@ def _get_resume_info(perm_dir: Path, lora_name: str) -> dict:
 
 # ── In-process training ──────────────────────────────────────────────────
 class _TqdmProgressWrapper(tqdm):
-    """Wrapper around tqdm that tracks progress and checks for cancel signals."""
-    _callbacks: list = []
-    _cancel_path = None
+    """Wrapper around tqdm that tracks progress and checks for cancel signals.
 
-    def __init__(self, *args, **kwargs):
+    NOTE: This replaces the global tqdm.tqdm class during training so that
+    kohya-ss's internal progress bars use our wrapper. This is a deliberate
+    monkey-patch because kohya-ss does not expose a callback hook for
+    step-level progress. The original tqdm class is restored in the
+    ``finally`` block of ``run_single_training``.
+    """
+    _callbacks: list[Any] = []
+    _cancel_path: Path | None = None
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._step_count = 0
 
     @classmethod
-    def set_callbacks(cls, callbacks, cancel_path=None):
+    def set_callbacks(cls, callbacks: list[Any], cancel_path: Path | None = None) -> None:
         cls._callbacks = callbacks
         cls._cancel_path = cancel_path
 
-    def update(self, n=1):
+    def update(self, n: int = 1) -> Any:
         self._step_count += n
         for cb in self._callbacks:
             try:
@@ -258,7 +266,7 @@ class _TqdmProgressWrapper(tqdm):
 # ── Custom save points (monkey-patch kohya-ss) ──────────────────────────
 _save_points: set[int] = set()
 _50p_step_global: int = 0
-_original_save_fn = None
+_original_save_fn: Any = None
 
 
 def _calculate_save_steps(max_steps: int) -> list[int]:
@@ -314,7 +322,7 @@ def _cleanup_extra_checkpoints(output_dir: Path, lora_name: str, max_steps: int)
             pass
 
 
-def _setup_save_filter():
+def _setup_save_filter() -> bool:
     """Monkey-patch kohya-ss model save to only save at configured steps.
 
     kohya-ss only supports uniform save_every_n_steps intervals.
@@ -323,6 +331,7 @@ def _setup_save_filter():
     state for recovery.
 
     Must be called after kohya-ss modules are imported.
+    Returns True if the patch was applied successfully.
     """
     global _original_save_fn
 
@@ -338,12 +347,13 @@ def _setup_save_filter():
 
     # Signature: (args, on_epoch_end, accelerator, save_dtype, epoch,
     #             num_train_epochs, global_step, dit)
-    def _filtered_save(*args, **kwargs):
+    def _filtered_save(*args: Any, **kwargs: Any) -> None:
+        global _50p_step_global
         global_step = kwargs.get("global_step", args[6] if len(args) > 6 else 0)
         accelerator = kwargs.get("accelerator", args[2] if len(args) > 2 else None)
 
         if global_step in _save_points:
-            _original_save_fn(*args, **kwargs)
+            _original_save_fn(*args, **kwargs)  # type: ignore[misc]
             # Save accelerator state at the 50% step for recovery
             if (accelerator is not None
                     and abs(global_step - _50p_step_global) <= 2):
@@ -355,7 +365,7 @@ def _setup_save_filter():
     return True
 
 
-def _restore_save():
+def _restore_save() -> None:
     """Restore original kohya-ss save function."""
     global _original_save_fn
     if _original_save_fn is not None:
@@ -371,7 +381,7 @@ def _restore_save():
 _current_step_global = 0
 
 
-def _build_kohya_args(params, kohya_parser):
+def _build_kohya_args(params: dict[str, Any], kohya_parser: Any) -> Any:
     """Build a full kohya-ss Namespace using parser defaults + overrides."""
     p = params
     args = kohya_parser.parse_args([])
@@ -430,12 +440,17 @@ def _reset_kohya_global_state() -> None:
         pass
 
 
-def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Path | None = None) -> dict:
+def run_single_training(
+    params: dict[str, Any],
+    output_dir: Path,
+    job_id: str,
+    resume: Path | None = None,
+) -> dict[str, Any]:
     """Run a single training job in-process."""
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "job_manifest.json"
 
-    manifest = {
+    manifest: dict[str, Any] = {
         "jobId": job_id,
         "status": "running",
         "params": {k: v for k, v in params.items() if k != "output_dir"},
@@ -465,7 +480,9 @@ def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Pat
     # Auto-calculate repeats: target ~12 steps_per_epoch (10-15 range)
     base_repeats = manual_repeats if manual_repeats is not None else calculate_repeats(total_images, batch_size)
 
-    subset_configs = [{"image_dir": s["image_dir"], "num_repeats": base_repeats} for s in subsets]
+    subset_configs: list[dict[str, Any]] = [
+        {"image_dir": s["image_dir"], "num_repeats": base_repeats} for s in subsets
+    ]
 
     # Bucket rebalance
     rebalance_subsets = maybe_build_bucket_rebalance_subset(
@@ -504,7 +521,6 @@ def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Pat
         subsets=subset_configs,
     )
 
-
     # Zip training data backup
     try:
         zip_training_data(params["training_images"], str(output_dir))
@@ -521,11 +537,11 @@ def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Pat
 
     current_step = 0
     total_steps = params.get("max_steps", 800)
-    avg_loss = None
-    error_message = None
+    avg_loss: float | None = None
+    error_message: str | None = None
     cancel_path = _project_root / "jobs" / f"{job_id}.cancel"
 
-    def _on_step(step, bar):
+    def _on_step(step: int, bar: Any) -> None:
         nonlocal current_step, total_steps, avg_loss
         global _current_step_global
         current_step = step
@@ -553,7 +569,6 @@ def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Pat
         os.environ["OMP_NUM_THREADS"] = "1"
         os.environ["PYTHONIOENCODING"] = "utf-8"
 
-
         train_util.verify_command_line_training_args(args)
 
         # Setup custom save points: checkpoints at 50%, 75%; state at 50%
@@ -569,7 +584,6 @@ def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Pat
         trainer.train(args)
         exit_code = 0
     except KeyboardInterrupt:
-
         exit_code = -1
     except Exception as e:
         error_message = str(e)
@@ -612,7 +626,7 @@ def run_single_training(params: dict, output_dir: Path, job_id: str, resume: Pat
 
 
 # ── CLI main ─────────────────────────────────────────────────────────────
-def _run_single(args, dataset_path, lora_name):
+def _run_single(args: Any, dataset_path: Path, lora_name: str) -> None:
     """Execute a single training run."""
     output_base = build_output_dir(args.dataset, args.output)
     output_base.mkdir(parents=True, exist_ok=True)
@@ -630,7 +644,7 @@ def _run_single(args, dataset_path, lora_name):
     (_project_root / "jobs").mkdir(exist_ok=True)
 
     # Auto-resume: check for incomplete run
-    resume_path = None
+    resume_path: Path | None = None
     resume_info = _get_resume_info(work_dir, lora_name)
     if resume_info["incomplete"]:
         if resume_info["state_dir"]:
@@ -663,7 +677,7 @@ def _run_single(args, dataset_path, lora_name):
         sys.exit(1)
 
 
-def _run_matrix(args, dataset_path, lora_name):
+def _run_matrix(args: Any, dataset_path: Path, lora_name: str) -> None:
     """Execute a matrix training run (all permutations)."""
     output_base = build_output_dir(args.dataset, args.output)
     output_base.mkdir(parents=True, exist_ok=True)
@@ -677,14 +691,14 @@ def _run_matrix(args, dataset_path, lora_name):
     permutations = generate_permutations(param_ranges)
 
     # Load eval config and pick shared caption if --evaluate is set
-    eval_config = None
-    eval_caption = None
+    eval_config: dict[str, Any] | None = None
+    eval_caption: str | None = None
     if args.evaluate:
         eval_config = load_eval_config(args.eval_config)
         eval_caption = pick_caption(str(dataset_path))
         logger.info("Eval caption (shared across matrix): %s", eval_caption[:80])
 
-    base_params = {
+    base_params: dict[str, Any] = {
         "network_dim": int(all_param_ranges["network_dim"][0]),
         "network_alpha": float(all_param_ranges["network_alpha"][0]),
         "learning_rate": float(all_param_ranges["learning_rate"][0]),
@@ -715,7 +729,7 @@ def _run_matrix(args, dataset_path, lora_name):
     manifest_path = output_base / "manifest.json"
 
     # Load existing manifest if resuming or if one exists (auto-resume)
-    existing_manifest = None
+    existing_manifest: dict[str, Any] | None = None
     if manifest_path.exists():
         try:
             existing_manifest = json.loads(manifest_path.read_text())
@@ -727,7 +741,7 @@ def _run_matrix(args, dataset_path, lora_name):
         logger.info("Loaded existing manifest: %d completed, %d failed, %d total",
                      manifest.get("completed", 0), manifest.get("failed", 0), manifest.get("total", 0))
     else:
-        manifest = {
+        manifest: dict[str, Any] = {
             "mode": "matrix",
             "param_ranges": {k: list(v) for k, v in param_ranges.items()},
             "total": len(permutations),
@@ -748,7 +762,7 @@ def _run_matrix(args, dataset_path, lora_name):
     cancelled = manifest.get("cancelled", 0)
 
     # Build a set of completed perm names for quick lookup
-    completed_perms = set()
+    completed_perms: set[str] = set()
     for entry in manifest.get("permutations", []):
         if entry.get("status") == "completed":
             perm_key = "x".join(f"{k}-{v}" for k, v in entry["params"].items())
@@ -780,7 +794,7 @@ def _run_matrix(args, dataset_path, lora_name):
 
         # Check for incomplete run and find resume path
         resume_info = _get_resume_info(perm_dir, lora_name)
-        resume_path = None
+        resume_path: Path | None = None
         if resume_info["incomplete"]:
             if resume_info["state_dir"]:
                 resume_path = resume_info["state_dir"]
@@ -847,7 +861,7 @@ def _run_matrix(args, dataset_path, lora_name):
         sys.exit(1)
 
 
-def main():
+def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 

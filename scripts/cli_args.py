@@ -5,6 +5,8 @@ Handles argument definition, parsing, and conversion to training params.
 
 import argparse
 import sys
+from typing import Any
+
 from scripts.constants import DEFAULTS, DEFAULT_EVAL_CONFIG
 
 
@@ -207,10 +209,10 @@ Examples:
     return parser
 
 
-def parse_list_value(value: str) -> list:
+def parse_list_value(value: str) -> list[Any]:
     """Parse a comma-separated value string into a list of mixed types."""
     parts = [p.strip() for p in value.split(",")]
-    result = []
+    result: list[Any] = []
     for part in parts:
         if not part:
             continue
@@ -230,7 +232,7 @@ def parse_list_value(value: str) -> list:
     return result
 
 
-def parse_params(args) -> dict:
+def parse_params(args: argparse.Namespace) -> dict[str, Any]:
     """Parse CLI args into a training params dict (single value each)."""
     return {
         "network_dim": int(args.network_dim),
@@ -256,14 +258,17 @@ def parse_params(args) -> dict:
     }
 
 
-def parse_param_ranges(args, include_single: bool = False) -> dict:
+def parse_param_ranges(
+    args: argparse.Namespace,
+    include_single: bool = False,
+) -> dict[str, list[Any]]:
     """Parse CLI args into param ranges dict.
 
-    If include_single is False (default), only parameters with multiple values
-    are returned (used for permutation generation).
-    If include_single is True, all range-capable parameters are returned.
+    If *include_single* is False (default), only parameters with multiple
+    values are returned (used for permutation generation).
+    If True, all range-capable parameters are returned.
     """
-    range_keys = [
+    range_keys: list[tuple[str, str]] = [
         ("network_dim", args.network_dim),
         ("network_alpha", args.alpha),
         ("learning_rate", args.learning_rate),
@@ -273,7 +278,7 @@ def parse_param_ranges(args, include_single: bool = False) -> dict:
         ("scheduler", args.scheduler),
         ("resolution", args.resolution),
     ]
-    ranges = {}
+    ranges: dict[str, list[Any]] = {}
     for key, value in range_keys:
         parsed = parse_list_value(value)
         if include_single or len(parsed) > 1:
@@ -281,10 +286,13 @@ def parse_param_ranges(args, include_single: bool = False) -> dict:
     return ranges
 
 
-def ensure_dataset(args):
+def ensure_dataset(args: argparse.Namespace) -> str:
     """Validate that --dataset was provided for non-help operations.
 
     Returns the dataset path string.
+
+    Raises:
+        SystemExit: If --dataset is not provided.
     """
     if args.dataset is None:
         print("ERROR: --dataset is required.", file=sys.stderr)

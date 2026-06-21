@@ -3,26 +3,36 @@
 from scripts.validation import calculate_repeats
 
 
-def test_calculate_repeats_uses_batch_size():
-    # 70 images, 800 steps, batch size 4, target 4 epochs -> ceil(3200 / 280) = 12
-    assert calculate_repeats(70, max_steps=800, batch_size=4, target_epochs=4) == 12
+def test_calculate_repeats_basic():
+    """12 images, bs=4, target 12 steps/epoch -> ceil(48/12) = 4."""
+    assert calculate_repeats(12, batch_size=4) == 4
 
 
-def test_calculate_repeats_respects_target_epochs():
-    # Higher target epochs should require fewer repeats.
-    repeats_4_epochs = calculate_repeats(70, max_steps=800, batch_size=4, target_epochs=4)
-    repeats_10_epochs = calculate_repeats(70, max_steps=800, batch_size=4, target_epochs=10)
-    
-    repeat_10_images_2_epochs_bs_4 = calculate_repeats(10, max_steps=800, batch_size=4, target_epochs=2)
-    # repeats = ceil((800 * 4) / (10 * 2)) = ceil(160) = 160
-    assert repeat_10_images_2_epochs_bs_4 == 160
+def test_calculate_repeats_few_images():
+    """5 images, bs=4, target 12 steps/epoch -> ceil(48/5) = 10."""
+    assert calculate_repeats(5, batch_size=4) == 10
 
-    assert repeats_10_epochs < repeats_4_epochs
-    assert repeats_10_epochs == 5
+
+def test_calculate_repeats_many_images():
+    """50 images, bs=4, target 12 steps/epoch -> ceil(48/50) = 1."""
+    assert calculate_repeats(50, batch_size=4) == 1
+
+
+def test_calculate_repeats_respects_batch_size():
+    """Same image count, different batch sizes produce different repeats."""
+    r_bs1 = calculate_repeats(20, batch_size=1)
+    r_bs4 = calculate_repeats(20, batch_size=4)
+    assert r_bs4 > r_bs1
+
+
+def test_calculate_repeats_custom_target():
+    """Higher target steps/epoch requires more repeats."""
+    r_10 = calculate_repeats(17, batch_size=4, target_steps_per_epoch=10)
+    r_15 = calculate_repeats(17, batch_size=4, target_steps_per_epoch=15)
+    # ceil(40/17)=3 vs ceil(60/17)=4
+    assert r_15 > r_10
 
 
 def test_calculate_repeats_invalid_inputs_fallback_to_one():
-    assert calculate_repeats(0, max_steps=800, batch_size=4, target_epochs=4) == 1
-    assert calculate_repeats(10, max_steps=0, batch_size=4, target_epochs=4) == 1
-    assert calculate_repeats(10, max_steps=800, batch_size=0, target_epochs=4) == 1
-    assert calculate_repeats(10, max_steps=800, batch_size=4, target_epochs=0) == 1
+    assert calculate_repeats(0, batch_size=4) == 1
+    assert calculate_repeats(10, batch_size=0) == 1

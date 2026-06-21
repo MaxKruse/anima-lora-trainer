@@ -69,10 +69,8 @@ def discover_subsets(image_dir: str) -> list[dict[str, Any]]:
 
 
 def generate_dataset_toml(
-    image_dir: str | None = None,
+    *,
     batch_size: int = 4,
-    num_images: int = 0,
-    epochs: int = 2,
     num_repeats: int = 1,
     output_path: str = "dataset.toml",
     resolution: int = 1024,
@@ -80,6 +78,9 @@ def generate_dataset_toml(
     caption_tag_dropout_rate: float = 0.1,
     keep_tokens: int = 1,
     subsets: list[dict[str, Any]] | None = None,
+    image_dir: str | None = None,
+    num_images: int = 0,
+    epochs: int = 2,
 ) -> str:
     """Generate a .toml dataset config for training.
 
@@ -87,11 +88,7 @@ def generate_dataset_toml(
     special characters (quotes, backslashes, spaces) are handled safely.
 
     Args:
-        image_dir: Path to directory containing training images.
-                   Used as a single subset when *subsets* is None.
         batch_size: Training batch size.
-        num_images: Number of images in the dataset (legacy, ignored when subsets provided).
-        epochs: Number of training epochs (passed for API compat, set via CLI).
         num_repeats: How many times each image is repeated per epoch.
         output_path: Path to write the TOML file.
         resolution: Image resolution (default: 1024).
@@ -99,11 +96,14 @@ def generate_dataset_toml(
             token_warmup_step, and caption_tag_dropout_rate (required by
             kohya-ss when --cache_text_encoder_outputs is used).
         caption_tag_dropout_rate: Probability of dropping each caption tag
-            (default: 0.05). Overridden to 0.0 when caching is enabled.
+            (default: 0.1). Overridden to 0.0 when caching is enabled.
         keep_tokens: Number of leading tokens to preserve from caption shuffle.
-        subsets: Optional list of subset dicts for multi-folder datasets.
+        subsets: List of subset dicts for multi-folder datasets.
             Each dict: {"image_dir": str, "num_repeats": int}.
             When provided, *image_dir* and *num_repeats* are ignored.
+        image_dir: Legacy single-folder path. Used only when *subsets* is None.
+        num_images: Legacy, ignored when *subsets* is provided.
+        epochs: Legacy, passed for API compat (set via CLI).
 
     Returns:
         Path to the generated TOML file.

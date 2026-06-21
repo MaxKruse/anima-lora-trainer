@@ -26,6 +26,9 @@ eval.config.json
 .DS_Store
 Thumbs.db
 
+# AI assistant tooling
+.serena/
+
 # training job artifacts
 /jobs
 

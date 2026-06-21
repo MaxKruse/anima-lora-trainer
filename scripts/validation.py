@@ -8,6 +8,7 @@ import math
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from scripts.constants import (
     IMAGE_EXTENSIONS,
@@ -20,7 +21,7 @@ from scripts.constants import (
 from scripts.dataset_toml import discover_subsets
 
 
-def _write_json(path: Path, data: dict) -> None:
+def _write_json(path: Path, data: dict[str, Any]) -> None:
     """Atomic JSON write."""
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2))
@@ -57,8 +58,8 @@ def check_validation(dataset_dir: str) -> bool:
 
 def write_validation_marker(
     dataset_dir: str,
-    subsets: list[dict],
-    params: dict,
+    subsets: list[dict[str, Any]],
+    params: dict[str, Any],
     warnings: list[str],
 ) -> Path:
     """Write the validation marker file after successful validation."""
@@ -69,7 +70,7 @@ def write_validation_marker(
     total_images = sum(s["num_images"] for s in subsets)
     total_captions = sum(s.get("num_captions", 0) for s in subsets)
 
-    marker_data = {
+    marker_data: dict[str, Any] = {
         "dataset": str(Path(dataset_dir).resolve()),
         "validated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "total_images": total_images,
@@ -225,7 +226,7 @@ def validate_dataset(
 
     # Write validation marker
     auto_max_steps = calculate_max_steps(batch_size)
-    params = {"max_steps": auto_max_steps, "batch_size": batch_size}
+    params: dict[str, Any] = {"max_steps": auto_max_steps, "batch_size": batch_size}
     marker_path = write_validation_marker(
         image_dir, subsets, params, warnings
     )

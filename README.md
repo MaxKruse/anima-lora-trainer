@@ -46,6 +46,33 @@ Alternatively, prefix commands with `uv run` to use the venv without activating:
 uv run python scripts/train.py --validate --dataset datasets/my-char/img
 ```
 
+### CLI Commands
+
+After `uv sync`, two commands are registered and available from the venv:
+
+| Command | Description |
+|---------|-------------|
+| `lora-train` | Train LoRAs (single or matrix mode) |
+| `lora-evaluate` | Run inference on trained LoRAs for comparison |
+
+Use them with `uv run` (no activation needed):
+```bash
+uv run lora-train --validate --dataset datasets/my-char/img
+uv run lora-train --mode single --dataset datasets/my-char/img --name MyChar
+uv run lora-evaluate --dataset datasets/my-char/img --output datasets/my-char/out
+```
+
+Or activate the venv first and call them directly:
+```bash
+# Windows
+.venv\Scripts\activate
+lora-train --validate --dataset datasets/my-char/img
+
+# Linux/macOS
+source .venv/bin/activate
+lora-train --validate --dataset datasets/my-char/img
+```
+
 ### Model Setup
 
 Download these base models into the `models/` directory:
@@ -104,7 +131,7 @@ Each subdirectory gets its own `[[datasets.subsets]]` entry in the generated `da
 ### Validate Before Training (Mandatory)
 
 ```bash
-uv run .\scripts\train.py --validate --dataset .\datasets\froot\img
+uv run python scripts/train.py --validate --dataset datasets/froot/img
 ```
 
 Checks image counts, caption coverage, and per-folder limits. Warnings are non-blocking — only hard errors (missing directory, no images, no captions) prevent training.
@@ -116,13 +143,13 @@ Checks image counts, caption coverage, and per-folder limits. Warnings are non-b
 Train one LoRA with fixed parameters. All flags default to values from proven training runs.
 
 ```bash
-uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Froot-Anima
+uv run python scripts/train.py --mode single --dataset datasets/froot/img --name Froot-Anima
 
 # custom params
-uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Froot-Anima --max-steps 500 --lr 0.0002 --bs 4 --network-dim 20 --alpha 1
+uv run python scripts/train.py --mode single --dataset datasets/froot/img --name Froot-Anima --max-steps 500 --lr 0.0002 --bs 4 --network-dim 20 --alpha 1
 
 # bucket skew rebalance (random-crop augmentation)
-uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Froot-Anima --rebalance-buckets
+uv run python scripts/train.py --mode single --dataset datasets/froot/img --name Froot-Anima --rebalance-buckets
 ```
 
 ### Matrix Run
@@ -130,7 +157,7 @@ uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Fr
 Specify comma-separated values for any parameter — all permutations are trained sequentially.
 
 ```bash
-uv run .\scripts\train.py --mode matrix --dataset .\datasets\froot\img --name Froot --network-dim 16,20,32 --alpha 1,16,20 --lr 0.0001,0.0002
+uv run python scripts/train.py --mode matrix --dataset datasets/froot/img --name Froot --network-dim 16,20,32 --alpha 1,16,20 --lr 0.0001,0.0002
 ```
 
 This generates 3 × 3 × 2 = **18 training runs**.
@@ -266,7 +293,8 @@ scripts/
   tag_extractor.py          ← extract tags from .txt captions
   model_verify.py           ← verify/download model files
   setup_env.py              ← environment setup helper
-  rename_output_dirs.py     ← rename legacy output directories
+  list_loras.py             ← print LoRA tags for prompt use
+  legacy/                   ← deprecated migration scripts
 sd-scripts/                 ← kohya-ss/sd-scripts (training engine)
 models/                     ← downloaded base models
 datasets/                   ← training datasets
@@ -282,3 +310,9 @@ tests/                      ← test suite
 - Checkpoint interval is `max_steps // epochs` (e.g., 800 steps / 2 epochs = save every 400 steps)
 - Auto-resume: incomplete runs are detected via `job_manifest.json` status and accelerator state dirs
 - Progress is tracked via `job_manifest.json` (single mode) or `manifest.json` (matrix mode)
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+The `sd-scripts/` submodule (kohya-ss/sd-scripts) is licensed under the [Apache License 2.0](sd-scripts/LICENSE.md). It is included as a git submodule and must be initialized with `git submodule update --init --recursive`.

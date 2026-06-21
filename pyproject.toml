@@ -2,54 +2,39 @@
 name = "lora-matrix-trainer"
 version = "0.1.0"
 requires-python = ">=3.10"
+description = "Train Anima character LoRA models via CLI — single runs or matrix hyperparameter sweeps"
+readme = "README.md"
+license = "MIT"
 dependencies = [
     "torch",
-
     "torchvision",
-
     "accelerate",
-
     "transformers",
-
     "diffusers[torch]",
-
     "safetensors",
-
     "bitsandbytes",
-
     "lion-pytorch",
-
     "pytorch-optimizer",
-
     "prodigyopt",
-
     "prodigy-plus-schedule-free",
-
     "schedulefree",
-
     "sentencepiece",
-
     "toml",
-
     "rich",
-
     "numpy",
-
     "einops",
-
     "opencv-python",
-
     "ftfy",
-
     "huggingface-hub",
-
     "tensorboard",
-
     "voluptuous",
-
     "imagesize",
-
+    "triton-windows>=3.7.0.post26",
 ]
+
+[project.scripts]
+lora-train = "scripts.train:main"
+lora-evaluate = "scripts.evaluate:main"
 
 [dependency-groups]
 dev = [
