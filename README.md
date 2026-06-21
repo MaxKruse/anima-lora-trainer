@@ -1,21 +1,74 @@
 # LoRA Matrix Trainer
 
-Train Anima character LoRA models via a lightweight CLI wrapper around `sd-scripts` — single runs or matrix hyperparameter sweeps.
+Train Anima character LoRA models via a lightweight CLI wrapper around [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts) — single runs or matrix hyperparameter sweeps.
+
+## Prerequisites
+
+- **Python 3.10+** with [uv](https://docs.astral.sh/uv/)
+- **NVIDIA GPU** (RTX 30-series or newer, CUDA-enabled)
+- **Base model files** (see [Model Setup](#model-setup) below)
+
+## Installation
+
+```bash
+# Clone with --recursive to include the sd-scripts submodule
+git clone --recursive https://github.com/MaxKruse/lora-matrix-trainer.git
+cd lora-matrix-trainer
+
+# If you already cloned without --recursive, initialize the submodule:
+git submodule update --init --recursive
+```
+
+### Environment Setup
+
+`uv` manages the virtual environment automatically. Run:
+
+```bash
+# Detect GPU and generate pyproject.toml with correct CUDA index (cu128 or cu130)
+uv run python scripts/setup_env.py
+
+# Install dependencies into .venv (creates it if missing)
+uv sync
+```
+
+On Windows, activate the venv manually if needed:
+```bash
+.venv\Scripts\activate
+```
+
+On Linux/macOS:
+```bash
+source .venv/bin/activate
+```
+
+Alternatively, prefix commands with `uv run` to use the venv without activating:
+```bash
+uv run python scripts/train.py --validate --dataset datasets/my-char/img
+```
+
+### Model Setup
+
+Download these base models into the `models/` directory:
+
+| Model | Directory | File | Source |
+|-------|-----------|------|--------|
+| Diffusion | `models/diffusion_model/` | `anima-base-v1.0.safetensors` | [Anima release](https://huggingface.co/SkT/Anima) |
+| Text Encoder | `models/text_encoder/` | `qwen_3_06b_base.safetensors` | [Qwen3 0.6B Base](https://huggingface.co/Qwen/Qwen3-0.6B) |
+| VAE | `models/vae/` | `qwen_image_vae.safetensors` | Included with Anima release |
+
+The `sd-scripts` submodule (kohya-ss training engine) is included automatically via `--recursive` clone.
 
 ## Quick Start
 
 ```bash
-# Install Python dependencies
-uv sync
-
 # 1. Validate your dataset (mandatory)
-uv run .\scripts\train.py --validate --dataset .\datasets\froot\img
+uv run python scripts/train.py --validate --dataset datasets/froot/img
 
 # 2. Train a single LoRA (uses proven defaults)
-uv run .\scripts\train.py --mode single --dataset .\datasets\froot\img --name Froot-Anima
+uv run python scripts/train.py --mode single --dataset datasets/froot/img --name Froot-Anima
 
 # 3. Matrix sweep (all permutations)
-uv run .\scripts\train.py --mode matrix --dataset .\datasets\froot\img --name Froot --network-dim 16,20,32 --alpha 1,20
+uv run python scripts/train.py --mode matrix --dataset datasets/froot/img --name Froot --network-dim 16,20,32 --alpha 1,20
 ```
 
 **Validation is mandatory.** Training will refuse to start until you've run `--validate` on the dataset.

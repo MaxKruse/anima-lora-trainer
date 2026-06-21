@@ -32,9 +32,6 @@ Thumbs.db
 # output directories inside datasets (training results)
 datasets/*/out/
 
-# cloned sd-scripts repo
-/sd-scripts
-
 # downloaded model files
 /models/diffusion_model/
 /models/vae/
