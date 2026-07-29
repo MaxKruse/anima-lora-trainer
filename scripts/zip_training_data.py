@@ -16,8 +16,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-
-IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif'}
+from scripts.constants import IMAGE_EXTENSIONS
 
 
 def zip_training_data(source_dir: str, output_dir: str) -> str | None:

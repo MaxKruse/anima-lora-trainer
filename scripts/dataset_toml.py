@@ -8,7 +8,7 @@ import toml
 from pathlib import Path
 from typing import Any
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
+from scripts.constants import IMAGE_EXTENSIONS
 
 
 def _count_images_in_dir(dir_path: Path) -> int:

@@ -65,7 +65,7 @@ MODEL_PATHS = {
 }
 
 # ── Image extensions ─────────────────────────────────────────────────────
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif", ".jfif", ".jif"}
 
 # ── Eval defaults ────────────────────────────────────────────────────────
 DEFAULT_EVAL_CONFIG = str(PROJECT_ROOT / "eval.config.json")

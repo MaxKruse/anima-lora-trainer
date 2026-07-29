@@ -1,6 +1,7 @@
 """Dataset validation for LoRA training.
 
 Checks folder structure, image counts, caption coverage, and writes validation markers.
+Converts non-JPG images to JPG during validation.
 """
 
 import json
@@ -9,6 +10,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+
+from PIL import Image
 
 from scripts.constants import (
     IMAGE_EXTENSIONS,
@@ -19,6 +22,79 @@ from scripts.constants import (
     VALIDATION_MARKER,
 )
 from scripts.dataset_toml import discover_subsets
+
+# Extensions that should be converted to .jpg during validation
+_CONVERTIBLE_EXTENSIONS = {".png", ".webp", ".bmp", ".tiff", ".tif", ".jfif", ".jif"}
+
+# Extensions that are already jpg and don't need conversion
+_JPG_EXTENSIONS = {".jpg", ".jpeg"}
+
+
+def _convert_to_jpg(img_path: Path) -> bool:
+    """Convert a single image file to JPG in place.
+
+    Renames the file to .jpg (compositing alpha onto white if needed).
+    Returns True if conversion succeeded, False otherwise.
+    """
+    try:
+        with Image.open(img_path) as img:
+            if img.mode in ("RGBA", "LA", "P"):
+                # Composite onto white background for formats with alpha
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                if img.mode == "P":
+                    img = img.convert("RGBA")
+                if "A" in img.mode:
+                    background.paste(img, mask=img.split()[-1])
+                    img = background
+                else:
+                    img = img.convert("RGB")
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+
+            jpg_path = img_path.with_suffix(".jpg")
+            img.save(jpg_path, "JPEG", quality=95)
+            img_path.unlink()
+            return True
+    except Exception as e:
+        print(f"  WARNING: Failed to convert {img_path.name}: {e}", file=sys.stderr)
+        return False
+
+
+def convert_images_to_jpg(img_dir: Path) -> int:
+    """Convert all non-JPG images in img_dir to JPG.
+
+    Scans the directory and any immediate subdirectories.
+    Also renames matching .txt caption files if the image filename changes.
+    Returns the number of files successfully converted.
+    """
+    converted = 0
+    dirs_to_scan = [img_dir]
+
+    # Also scan immediate subdirectories
+    if img_dir.is_dir():
+        for entry in sorted(img_dir.iterdir()):
+            if entry.is_dir():
+                dirs_to_scan.append(entry)
+
+    for directory in dirs_to_scan:
+        for entry in sorted(directory.iterdir()):
+            if not entry.is_file():
+                continue
+            if entry.suffix.lower() not in _CONVERTIBLE_EXTENSIONS:
+                continue
+
+            # If a caption file exists for the old name, rename it for the new name
+            old_caption = entry.with_suffix(".txt")
+            new_caption = entry.with_suffix(".jpg").with_suffix(".txt")
+
+            success = _convert_to_jpg(entry)
+            if success:
+                if old_caption.exists() and not new_caption.exists():
+                    old_caption.rename(new_caption)
+                converted += 1
+                print(f"  Converted {entry.name} -> {entry.with_suffix('.jpg').name}")
+
+    return converted
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
@@ -172,6 +248,11 @@ def validate_dataset(
     if not out_dir.exists():
         out_dir.mkdir(parents=True, exist_ok=True)
         print(f"  Created output directory: {out_dir}")
+
+    # ── Convert non-JPG images to JPG ──────────────────────────────────
+    converted_count = convert_images_to_jpg(img_dir)
+    if converted_count > 0:
+        print(f"  Converted {converted_count} image(s) to JPG\n")
 
     # ── Validate images in img/ ────────────────────────────────────────
     subsets = discover_subsets(str(img_dir))
