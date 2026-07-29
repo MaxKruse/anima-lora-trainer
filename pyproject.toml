@@ -30,6 +30,7 @@ dependencies = [
     "voluptuous",
     "imagesize",
     "triton-windows>=3.7.0.post26",
+    "matplotlib",
 ]
 
 [project.scripts]

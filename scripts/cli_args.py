@@ -21,17 +21,17 @@ Examples:
   %(prog)s --validate --dataset datasets/froot/img
 
   # Single training run with defaults
-  %(prog)s --mode single --dataset datasets/froot/img --name Froot-Anima
+  %(prog)s --dataset datasets/froot/img --name Froot-Anima
 
   # Custom parameters
-  %(prog)s --mode single --dataset datasets/froot/img --name Froot --lr 0.0001 --bs 2 --network-dim 32
+  %(prog)s --dataset datasets/froot/img --name Froot --lr 0.0001 --bs 2 --network-dim 32
 
   # Matrix run (all permutations of given values)
   %(prog)s --mode matrix --dataset datasets/froot/img --name Froot --network-dim 16,32 --alpha 1,16 --lr 0.0001,0.0002
 
   # Matrix with output dir
   %(prog)s --mode matrix --dataset datasets/froot/img --name Froot --network-dim 16,20,32 --alpha 1,20 -o datasets/froot/out/matrix-run
-""",
+"""
     )
 
     # Mode
@@ -97,7 +97,7 @@ Examples:
         "--max-steps", "--ss",
         type=str,
         default=str(DEFAULTS["max_steps"]),
-        help=f"Max training step(s) [default: auto from batch_size, manual override] (comma-sep for matrix)",
+        help=f"Max training step(s) [default: auto from batch_size (bs4=600, bs3=800, bs2=1000, bs1=1600), manual override] (comma-sep for matrix)",
     )
     parser.add_argument(
         "--optimizer",
@@ -165,7 +165,14 @@ Examples:
     parser.add_argument(
         "--rebalance-buckets",
         action="store_true",
-        help="Detect dominant bucket skew (>20%% default) and redistribute by cropping excess images to adjacent buckets",
+        default=DEFAULTS["rebalance_buckets"],
+        help="Detect dominant bucket skew (>20%% default) and redistribute by cropping excess images to adjacent buckets [default: on]",
+    )
+    parser.add_argument(
+        "--no-rebalance-buckets",
+        action="store_false",
+        dest="rebalance_buckets",
+        help="Disable bucket rebalancing",
     )
     parser.add_argument(
         "--bucket-dominance-threshold",

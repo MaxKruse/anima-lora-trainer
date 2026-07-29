@@ -99,15 +99,20 @@ def calculate_max_steps(batch_size: int = 4) -> int:
     """Calculate auto max_steps based on batch size.
 
     Higher batch sizes converge faster, so they need fewer total steps.
-      batch_size=4 -> max_steps=500
-      batch_size=2 -> max_steps=750
-      batch_size=1 -> max_steps=1000
+    Scaling is slightly less than linear to keep theoretical training
+    stable across batch sizes.
+
+      batch_size=4 -> max_steps=600  (default, sweet spot)
+      batch_size=3 -> max_steps=800
+      batch_size=2 -> max_steps=1000
+      batch_size=1 -> max_steps=1600
     """
     return {
-        4: 500,
-        2: 750,
-        1: 1000,
-    }.get(batch_size, 500)
+        4: 600,
+        3: 800,
+        2: 1000,
+        1: 1600,
+    }.get(batch_size, 600)
 
 
 def calculate_repeats(

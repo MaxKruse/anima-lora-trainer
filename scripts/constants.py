@@ -7,11 +7,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # ── Defaults ─────────────────────────────────────────────────────────────
 DEFAULTS = {
-    "network_dim": 20,
+    "network_dim": 8,
     "network_alpha": 1,
     "learning_rate": 0.0002,
     "batch_size": 4,
-    "max_steps": 500,
+    "max_steps": 600,
     "optimizer": "AdamW8Bit",
     "scheduler": "cosine",
     "resolution": 1024,
@@ -22,6 +22,7 @@ DEFAULTS = {
     "cache_text_encoder": False,
     "caption_tag_dropout_rate": 0.1,
     "keep_tokens": 1,
+    "rebalance_buckets": True,
 }
 
 # ── Validation limits ────────────────────────────────────────────────────

@@ -58,7 +58,7 @@ After `uv sync`, two commands are registered and available from the venv:
 Use them with `uv run` (no activation needed):
 ```bash
 uv run lora-train --validate --dataset datasets/my-char/img
-uv run lora-train --mode single --dataset datasets/my-char/img --name MyChar
+uv run lora-train --dataset datasets/my-char/img --name MyChar
 uv run lora-evaluate --dataset datasets/my-char/img --output datasets/my-char/out
 ```
 
@@ -140,16 +140,16 @@ Checks image counts, caption coverage, and per-folder limits. Warnings are non-b
 
 ### Single Run
 
-Train one LoRA with fixed parameters. All flags default to values from proven training runs.
+Train one LoRA with fixed parameters. All flags default to values tuned for character training on Anima.
 
 ```bash
-uv run python scripts/train.py --mode single --dataset datasets/froot/img --name Froot-Anima
+uv run python scripts/train.py --dataset datasets/froot/img --name Froot-Anima
 
 # custom params
-uv run python scripts/train.py --mode single --dataset datasets/froot/img --name Froot-Anima --max-steps 500 --lr 0.0002 --bs 4 --network-dim 20 --alpha 1
+uv run python scripts/train.py --dataset datasets/froot/img --name Froot-Anima --max-steps 600 --lr 0.0002 --bs 4 --network-dim 8 --alpha 1
 
-# bucket skew rebalance (random-crop augmentation)
-uv run python scripts/train.py --mode single --dataset datasets/froot/img --name Froot-Anima --rebalance-buckets
+# disable bucket rebalance
+uv run python scripts/train.py --dataset datasets/froot/img --name Froot-Anima --no-rebalance-buckets
 ```
 
 ### Matrix Run
@@ -201,12 +201,11 @@ All accept comma-separated values in matrix mode.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--network-dim` | 20 | LoRA rank (dimension) |
+| `--network-dim` | 8 | LoRA rank (dimension) |
 | `--alpha`, `-a` | 1 | LoRA alpha (effective scale = alpha/dim) |
 | `--learning-rate`, `--lr` | 0.0002 | Learning rate |
 | `--batch-size`, `--bs` | 4 | Training batch size |
-| `--max-steps`, `--ss` | 800 | Max training steps |
-| `--epochs` | 2 | Number of epochs (checkpoint interval = max_steps / epochs) |
+| `--max-steps`, `--ss` | auto | Max training steps (auto from batch_size: bs4=600, bs3=800, bs2=1000, bs1=1600) |
 | `--optimizer` | AdamW8Bit | Optimizer type |
 | `--scheduler`, `-s` | cosine | LR scheduler |
 | `--resolution` | 1024 | Image resolution (768–1024) |
@@ -218,7 +217,8 @@ All accept comma-separated values in matrix mode.
 | `--no-gradient-checkpointing` | off | Disable gradient checkpointing |
 | `--no-cache-latents` | off | Disable latent caching |
 | `--cache-text-encoder` | off | Enable text encoder caching |
-| `--rebalance-buckets` | off | Detect dominant bucket skew and add random-crop augmented samples |
+| `--rebalance-buckets` | on | Detect dominant bucket skew and add random-crop augmented samples |
+| `--no-rebalance-buckets` | off | Disable bucket rebalancing |
 | `--bucket-dominance-threshold` | 0.20 | Dominant bucket share that triggers rebalance |
 | `--bucket-rebalance-max-aug` | 64 | Max augmented crops for rebalance |
 | `--bucket-rebalance-seed` | 42 | RNG seed for rebalance crop generation |
@@ -229,24 +229,54 @@ All accept comma-separated values in matrix mode.
 |------|-------------|
 | `--resume` | Explicit resume flag (auto-resume is default — completed perms are always skipped) |
 
-## Default Parameters (Proven Recipe)
+## Default Parameters (Character Training)
 
-These defaults come from successful training runs on real character datasets:
+These defaults are tuned for single-character LoRA training on Anima:
 
 | Parameter | Value | Why |
 |-----------|-------|-----|
-| `network_dim` | 20 | Sweet spot for character detail (16–32 range) |
-| `network_alpha` | 1 | Effective scale 0.05 — lets you prompt detail in/out |
+| `network_dim` | 8 | Compact rank - enough for character identity without overfitting |
+| `network_alpha` | 1 | Effective scale 0.125 — lets you prompt detail in/out |
 | `learning_rate` | 0.0002 | Aggressive but stable with cosine decay |
-| `epochs` | 2 | Balanced coverage without overfitting |
-| `batch_size` | 4 | Balanced gradient signal vs VRAM (~17GB) |
-| `max_steps` | 800 | Enough for convergence, checkpoints every 400 steps (800/2) |
+| `batch_size` | 4 | Balanced gradient signal vs VRAM (~17GB), sweet spot for default params |
+| `max_steps` | 600 | Auto-scaled from batch_size (see below) |
 | `optimizer` | AdamW8Bit | Memory-efficient, no convergence sacrifice |
 | `scheduler` | cosine | Smooth decay from peak LR to near-zero |
 | `mixed_precision` | bf16 | Required for Anima/Qwen3 |
 | `timestep_sampling` | sigmoid | Focuses on mid-to-high noise levels |
 | `caption_tag_dropout` | 0.1 | 10% random tag drops → better generalization |
 | `keep_tokens` | 1 | Preserves trigger word from caption shuffle |
+| `rebalance_buckets` | on | Reduces bucket skew via random-crop augmentation |
+
+### Auto max_steps by Batch Size
+
+The max_steps value auto-adjusts based on batch_size so the total "theoretical" training stays stable across configurations. Scaling is slightly less than linear:
+
+| Batch Size | Auto max_steps |
+|------------|----------------|
+| 4 (default) | 600 |
+| 3 | 800 |
+| 2 | 1000 |
+| 1 | 1600 |
+
+Override with `--max-steps` to set a fixed value.
+
+### Repeats Calculation
+
+The `num_repeats` value is auto-calculated so that `(num_images × repeats) / batch_size` falls in the 10-15 range (target ~12 steps per epoch). This ensures no single epoch dominates the training statistically - variety is king. Override with `--repeats`.
+
+### Style Training Tips
+
+For style LoRAs (not character-specific), adjust these parameters:
+
+- **Lower learning rate**: Use ~75% of the default (`--lr 0.00015`)
+- **More image variety**: 20-40+ diverse images covering the style broadly
+- **Higher network_dim**: Consider 16-32 for complex styles
+- The auto max_steps and repeats logic still applies based on your batch_size
+
+### Output Overwrite Protection
+
+If the output model file (`{name}.safetensors`) already exists at the target path, training will abort to prevent accidental overwrites. Remove the existing file or use `--name` / `--output` to choose a different path.
 
 ## Output Structure
 
@@ -256,26 +286,37 @@ datasets/froot/out/
   .work/
     dataset.toml              ← generated dataset config
     job_manifest.json         ← progress/status
-    Froot-Anima-step00000400.safetensors
-    Froot-Anima-step00000800.safetensors
+    Froot-Anima-step00000300.safetensors   ← 50% checkpoint
+    Froot-Anima-step00000450.safetensors   ← 75% checkpoint
     Froot-Anima.safetensors   ← final checkpoint
     Froot-Anima-state/        ← accelerator state (for resume)
     training-data.zip         ← backup of training data
   Froot-Anima.safetensors     ← copied final model
+  Froot-Anima_training_chart.png  ← loss + LR training chart
+  training_config.json        ← reproducibility artifact (params + exact CLI command)
 ```
 
 Matrix runs create subdirectories per permutation and a top-level `manifest.json`:
 ```
 datasets/froot/out/
   manifest.json               ← overall matrix manifest
-  lr-0.0001xsteps-800/        ← permutation working dir
-  lr-0.0001xsteps-1200/
-  lr-0.0002xsteps-800/
-  lr-0.0002xsteps-1200/
-  Froot-Anima-lr-0.0001-steps-800.safetensors  ← copied final models
-  Froot-Anima-lr-0.0001-steps-1200.safetensors
+  training_config.json        ← master matrix config (CLI command + param ranges)
+  lr-0.0001xbs-2/
+    training_config.json      ← per-permutation config
+    dataset.toml
+    job_manifest.json
+    ...
+  lr-0.0001xbs-4/
+    training_config.json
+    ...
+  Froot-Anima-lr-0.0001-bs-2.safetensors  ← copied final models
+  Froot-Anima-lr-0.0001-bs-4.safetensors
   ...
 ```
+
+Each `training_config.json` contains the exact CLI command (`cli_command` field), all effective parameters, and (for matrix) the full param ranges. Copy-paste the CLI command to reproduce the exact run.
+
+Each permutation directory also contains a `*_training_chart.png` with loss and LR curves.
 
 ## Project Structure
 
@@ -306,10 +347,16 @@ tests/                      ← test suite
 - Training runs in-process by importing `anima_train_network.py` from `sd-scripts`
 - A full kohya argument namespace is built from upstream defaults, then wrapper values override
 - `--validate` writes a `.validation.json` marker — training checks for this before starting
-- `--rebalance-buckets` detects when one aspect-ratio bucket dominates and redistributes via random-crop augmentation into adjacent buckets
-- Checkpoint interval is `max_steps // epochs` (e.g., 800 steps / 2 epochs = save every 400 steps)
+- `--rebalance-buckets` (on by default) detects when one aspect-ratio bucket dominates and redistributes via random-crop augmentation into adjacent buckets
+- Checkpoints saved at 50% and 75% of training (final model always saved)
+- Auto max_steps: batch_size=4→600, bs=3→800, bs=2→1000, bs=1→1600 (slightly less than linear scaling)
+- Auto repeats: `(num_images × repeats) / batch_size` targets ~12 steps per epoch (10-15 range)
 - Auto-resume: incomplete runs are detected via `job_manifest.json` status and accelerator state dirs
 - Progress is tracked via `job_manifest.json` (single mode) or `manifest.json` (matrix mode)
+- `training_config.json` artifact written after successful training for reproducibility
+- Output overwrite protection: aborts if `{name}.safetensors` already exists at the output path
+- Per-step metrics (loss + LR) captured during training and rendered as an ASCII chart in the terminal after completion
+- A PNG training chart (`{name}_training_chart.png`) is saved in the output folder alongside the model
 
 ## License
 

@@ -1,11 +1,13 @@
 """Standalone LoRA evaluation script.
 
-Discovers all .safetensors files in a training output directory and runs
-sd-cli inference on each one, generating comparison images at multiple
-resolutions.
+Discovers all .safetensors files in a training output directory and uses
+sd-server to generate comparison images at multiple resolutions.
 
 Handles both single-run output (``.work/`` subdirectory) and matrix-run
 output (permutation subdirectories) automatically.
+
+Requires sd-server to be running. Start it with:
+    sd-server.exe --diffusion-model <model> --vae <vae> --llm <encoder> --lora-model-dir <dir>
 
 Usage:
     # Evaluate all LoRAs in an output folder
@@ -17,8 +19,8 @@ Usage:
     # Dry run (list LoRAs without generating images)
     uv run python scripts/evaluate.py --dataset datasets/froot/img --output datasets/froot/out --dry-run
 
-    # Custom config and seed
-    uv run python scripts/evaluate.py --dataset datasets/froot/img --output datasets/froot/out --eval-config eval.config.json --seed 1234
+    # Custom config, seed, and server URL
+    uv run python scripts/evaluate.py --dataset datasets/froot/img --output datasets/froot/out --eval-config eval.config.json --seed 1234 --server-url http://127.0.0.1:1234
 """
 
 import argparse
@@ -37,6 +39,9 @@ from scripts.evaluation import (
     load_eval_config,
     pick_caption,
     run_inference,
+    _start_server,
+    _stop_server,
+    _wait_for_server_ready,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,6 +107,8 @@ def run_evaluate(
     eval_config_path: str | None,
     caption: str | None,
     seed: int | None,
+    server_url: str | None,
+    sd_server_path: str | None,
     dry_run: bool,
 ) -> int:
     """Run the full evaluation pipeline.
@@ -112,6 +119,10 @@ def run_evaluate(
     config = load_eval_config(eval_config_path)
     if seed is not None:
         config["seed"] = seed
+    if server_url is not None:
+        config["server_url"] = server_url
+    if sd_server_path is not None:
+        config["sd_server_path"] = sd_server_path
 
     # Resolve caption
     if caption is None:
@@ -143,47 +154,59 @@ def run_evaluate(
         )
         return 0
 
-    # Create samples directory at output_dir root
-    samples_dir = output_dir / "samples"
-    samples_dir.mkdir(parents=True, exist_ok=True)
+    # Start sd-server
+    startup_timeout = config.get("server_startup_timeout", 120)
+    server_url = config.get("server_url", "http://127.0.0.1:1234")
+    proc = _start_server(config, output_dir)
 
-    total = len(loras) * len(EVAL_RESOLUTIONS)
-    success = 0
-    failed = 0
+    try:
+        if not _wait_for_server_ready(server_url, startup_timeout):
+            return 0
 
-    for lora_idx, (lora_path, label) in enumerate(loras, 1):
-        logger.info(
-            "[%d/%d] Evaluating: %s",
-            lora_idx, len(loras), label,
-        )
-        for res_idx, (width, height) in enumerate(EVAL_RESOLUTIONS, 1):
+        # Create samples directory at output_dir root
+        samples_dir = output_dir / "samples"
+        samples_dir.mkdir(parents=True, exist_ok=True)
+
+        total = len(loras) * len(EVAL_RESOLUTIONS)
+        success = 0
+        failed = 0
+
+        for lora_idx, (lora_path, label) in enumerate(loras, 1):
             logger.info(
-                "  [%d/%d] %dx%d",
-                res_idx, len(EVAL_RESOLUTIONS), width, height,
+                "[%d/%d] Evaluating: %s",
+                lora_idx, len(loras), label,
             )
-            ok = run_inference(
-                config=config,
-                lora_path=lora_path,
-                lora_name=lora_path.stem,
-                caption=caption,
-                width=width,
-                height=height,
-                output_dir=samples_dir,
-            )
-            if ok:
-                success += 1
-            else:
-                failed += 1
-                # Clean up partial output
-                (samples_dir / f"{lora_path.stem}-{width}x{height}.png").unlink(
-                    missing_ok=True,
+            for res_idx, (width, height) in enumerate(EVAL_RESOLUTIONS, 1):
+                logger.info(
+                    "  [%d/%d] %dx%d",
+                    res_idx, len(EVAL_RESOLUTIONS), width, height,
                 )
+                ok = run_inference(
+                    config=config,
+                    lora_path=lora_path,
+                    lora_name=lora_path.stem,
+                    caption=caption,
+                    width=width,
+                    height=height,
+                    output_dir=samples_dir,
+                )
+                if ok:
+                    success += 1
+                else:
+                    failed += 1
+                    # Clean up partial output
+                    (samples_dir / f"{lora_path.stem}-{width}x{height}.png").unlink(
+                        missing_ok=True,
+                    )
 
-    logger.info(
-        "Evaluation complete: %d/%d images generated in %s",
-        success, total, samples_dir,
-    )
-    return success
+        logger.info(
+            "Evaluation complete: %d/%d images generated in %s",
+            success, total, samples_dir,
+        )
+        return success
+
+    finally:
+        _stop_server(proc)
 
 
 def main() -> None:
@@ -233,6 +256,18 @@ Examples:
         help="Path to eval config JSON (default: eval.config.json or auto-generated)",
     )
     parser.add_argument(
+        "--sd-server-path",
+        type=str,
+        default=None,
+        help="Path to sd-server.exe binary (default: from eval config)",
+    )
+    parser.add_argument(
+        "--server-url",
+        type=str,
+        default=None,
+        help="sd-server URL (default: from eval config or http://127.0.0.1:1234)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="List discovered LoRAs without running inference",
@@ -265,6 +300,8 @@ Examples:
         eval_config_path=args.eval_config,
         caption=args.caption,
         seed=args.seed,
+        server_url=args.server_url,
+        sd_server_path=args.sd_server_path,
         dry_run=args.dry_run,
     )
 

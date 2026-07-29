@@ -5,7 +5,7 @@ and in-process kohya-ss training.
 
 Usage:
     uv run python scripts/train.py --validate --dataset datasets/froot/img
-    uv run python scripts/train.py --mode single --dataset datasets/froot/img --name Froot-Anima
+    uv run python scripts/train.py --dataset datasets/froot/img --name Froot-Anima
     uv run python scripts/train.py --mode matrix --dataset datasets/froot/img --name Froot --network-dim 16,32 --alpha 1,16
 """
 
@@ -61,6 +61,11 @@ from scripts.evaluation import (
     load_eval_config,
     pick_caption,
     run_evaluation,
+)
+from scripts.training_chart import (
+    generate_png_chart,
+    parse_tensorboard_events,
+    print_training_summary,
 )
 from scripts.zip_training_data import zip_training_data
 
@@ -136,6 +141,77 @@ def _copy_final_model(perm_dir: Path, output_base: Path, lora_name: str, perm: d
     dest = output_base / name
     dest.write_bytes(final_model.read_bytes())
     logger.info("Copied final model: %s", dest.name)
+
+
+def _build_cli_command() -> str:
+    """Reconstruct the exact CLI command used to start this run."""
+    script = sys.argv[0] if sys.argv else "scripts/train.py"
+    return " ".join(f'"{arg}"' if " " in arg else arg for arg in sys.argv)
+
+
+def _build_config_from_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Build the common training config dict from effective params."""
+    auto_max = calculate_max_steps(params.get("batch_size", 4))
+    effective_steps = params.get("max_steps", auto_max)
+
+    return {
+        "network_dim": params.get("network_dim"),
+        "network_alpha": params.get("network_alpha"),
+        "learning_rate": params.get("learning_rate"),
+        "batch_size": params.get("batch_size"),
+        "max_steps": effective_steps,
+        "max_steps_auto": effective_steps == auto_max,
+        "optimizer": params.get("optimizer"),
+        "scheduler": params.get("scheduler"),
+        "resolution": params.get("resolution"),
+        "mixed_precision": params.get("mixed_precision"),
+        "timestep_sampling": params.get("timestep_sampling"),
+        "gradient_checkpointing": params.get("gradient_checkpointing", True),
+        "cache_latents": params.get("cache_latents", True),
+        "cache_text_encoder": params.get("cache_text_encoder", False),
+        "caption_tag_dropout_rate": params.get("caption_tag_dropout_rate"),
+        "keep_tokens": params.get("keep_tokens"),
+        "repeats": params.get("repeats"),
+        "rebalance_buckets": params.get("rebalance_buckets", DEFAULTS["rebalance_buckets"]),
+        "bucket_dominance_threshold": params.get("bucket_dominance_threshold"),
+        "bucket_rebalance_max_aug": params.get("bucket_rebalance_max_aug"),
+        "bucket_rebalance_seed": params.get("bucket_rebalance_seed"),
+    }
+
+
+def _write_training_config(
+    output_dir: Path,
+    lora_name: str,
+    params: dict[str, Any],
+    *,
+    mode: str = "single",
+    param_ranges: dict[str, list[Any]] | None = None,
+) -> None:
+    """Write a reproducibility config artifact (training_config.json).
+
+    For single mode: writes to output_dir (the final output base).
+    For matrix mode: writes per-permutation configs inside perm dirs,
+    and a master config at the matrix output base.
+
+    Records all effective parameters, the exact CLI command, and (for matrix)
+    the full param ranges so the run is fully reproducible.
+    """
+    config: dict[str, Any] = {
+        "mode": mode,
+        "lora_name": lora_name,
+        "training_images": params.get("training_images"),
+        "output_dir": str(output_dir),
+        "cli_command": _build_cli_command(),
+        "params": _build_config_from_params(params),
+        "training_completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    if mode == "matrix" and param_ranges is not None:
+        config["param_ranges"] = {k: list(v) for k, v in param_ranges.items()}
+
+    config_path = output_dir / "training_config.json"
+    _write_json(config_path, config)
+    logger.info("Wrote training config: %s", config_path)
 
 
 def _count_images_in_dir(image_dir: str) -> int:
@@ -381,8 +457,17 @@ def _restore_save() -> None:
 _current_step_global = 0
 
 
-def _build_kohya_args(params: dict[str, Any], kohya_parser: Any) -> Any:
-    """Build a full kohya-ss Namespace using parser defaults + overrides."""
+def _build_kohya_args(params: dict[str, Any], kohya_parser: Any, tb_logs_dir: Path) -> Any:
+    """Build a full kohya-ss Namespace using parser defaults + overrides.
+
+    Args:
+        params: Training parameters dict.
+        kohya_parser: The kohya-ss argument parser.
+        tb_logs_dir: Directory for TensorBoard events (enables step-level logging).
+
+    Returns:
+        kohya-ss args Namespace and the tb_logs_dir for post-training parsing.
+    """
     p = params
     args = kohya_parser.parse_args([])
     args.pretrained_model_name_or_path = MODEL_PATHS["diffusion_model"]
@@ -415,6 +500,11 @@ def _build_kohya_args(params: dict[str, Any], kohya_parser: Any) -> Any:
     args.network_train_unet_only = p.get("cache_text_encoder", False)
     args.vae_chunk_size = 64
     args.vae_disable_cache = True
+    # Enable TensorBoard logging so kohya-ss writes per-step metrics (loss, LR)
+    # to an events file we parse after training.
+    tb_logs_dir.mkdir(parents=True, exist_ok=True)
+    args.logging_dir = str(tb_logs_dir)
+    args.log_with = "tensorboard"
     # Resume from existing state if provided
     resume_path = p.get("resume")
     if resume_path:
@@ -446,6 +536,11 @@ def run_single_training(
     job_id: str,
     resume: Path | None = None,
 ) -> dict[str, Any]:
+    """Run a single training job in-process.
+
+    Returns a dict with keys: status, output_dir, exit_code, error,
+    and (on success) metrics_steps, metrics_loss, metrics_lr.
+    """
     """Run a single training job in-process."""
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "job_manifest.json"
@@ -541,6 +636,9 @@ def run_single_training(
     error_message: str | None = None
     cancel_path = _project_root / "jobs" / f"{job_id}.cancel"
 
+    # TensorBoard logs dir — kohya-ss writes per-step metrics here
+    tb_logs_dir = output_dir / ".tb_logs"
+
     def _on_step(step: int, bar: Any) -> None:
         nonlocal current_step, total_steps, avg_loss
         global _current_step_global
@@ -565,7 +663,7 @@ def run_single_training(
         from anima_train_network import AnimaNetworkTrainer, setup_parser as setup_anima_parser
         import library.train_util as train_util
 
-        args = _build_kohya_args(params, setup_anima_parser())
+        args = _build_kohya_args(params, setup_anima_parser(), tb_logs_dir)
         os.environ["OMP_NUM_THREADS"] = "1"
         os.environ["PYTHONIOENCODING"] = "utf-8"
 
@@ -622,7 +720,19 @@ def run_single_training(
         tqdm_module.tqdm = _real_tqdm
         if cancel_path.exists():
             cancel_path.unlink(missing_ok=True)
-        return {"status": manifest["status"], "output_dir": str(output_dir), "exit_code": exit_code, "error": error_message}
+
+        # Parse TensorBoard events for per-step metrics (loss + LR)
+        m_steps, m_loss, m_lr = parse_tensorboard_events(tb_logs_dir)
+
+        return {
+            "status": manifest["status"],
+            "output_dir": str(output_dir),
+            "exit_code": exit_code,
+            "error": error_message,
+            "metrics_steps": m_steps,
+            "metrics_loss": m_loss,
+            "metrics_lr": m_lr,
+        }
 
 
 # ── CLI main ─────────────────────────────────────────────────────────────
@@ -630,6 +740,14 @@ def _run_single(args: Any, dataset_path: Path, lora_name: str) -> None:
     """Execute a single training run."""
     output_base = build_output_dir(args.dataset, args.output)
     output_base.mkdir(parents=True, exist_ok=True)
+
+    # Abort if the final model already exists at the output path
+    existing_model = output_base / f"{lora_name}.safetensors"
+    if existing_model.exists():
+        print(f"ERROR: Output model already exists: {existing_model}", file=sys.stderr)
+        print(f"  Remove it or use --name / --output to choose a different path.", file=sys.stderr)
+        sys.exit(1)
+
     # Use a .work subdirectory for intermediate files, final model goes to output_base
     work_dir = output_base / ".work"
 
@@ -666,6 +784,30 @@ def _run_single(args: Any, dataset_path: Path, lora_name: str) -> None:
     if result["status"] == "completed":
         _copy_final_model(work_dir, output_base, lora_name, {})
         print(f"\n\u2713 Training completed -> {output_base / (lora_name + '.safetensors')}")
+
+        # Write reproducibility config artifact
+        _write_training_config(output_base, lora_name, params, mode="single")
+
+        # Training metrics chart — ASCII in terminal + PNG in output folder
+        _steps = result.get("metrics_steps", [])
+        _loss = result.get("metrics_loss", [])
+        _lr = result.get("metrics_lr", [])
+        if _steps and _loss:
+            print_training_summary(_steps, _loss, _lr if _lr else None)
+            try:
+                png_path = output_base / f"{lora_name}_training_chart.png"
+                generate_png_chart(
+                    _steps,
+                    _loss,
+                    _lr if _lr else None,
+                    png_path,
+                    title=f"Training: {lora_name}",
+                )
+                print(f"  Chart saved -> {png_path}")
+            except ImportError:
+                logger.warning(
+                    "matplotlib not installed — skip PNG chart. Install with: uv add matplotlib"
+                )
 
         # Post-training evaluation
         if args.evaluate:
@@ -831,6 +973,34 @@ def _run_matrix(args: Any, dataset_path: Path, lora_name: str) -> None:
                 _copy_final_model(perm_dir, output_base, lora_name, perm)
                 print(f"  \u2713 {perm_name}")
 
+                # Write per-permutation config artifact
+                _write_training_config(
+                    perm_dir, lora_name, run_params,
+                    mode="matrix",
+                    param_ranges=param_ranges,
+                )
+
+                # Training metrics chart — ASCII in terminal + PNG in perm folder
+                m_steps = result.get("metrics_steps", [])
+                m_loss = result.get("metrics_loss", [])
+                m_lr = result.get("metrics_lr", [])
+                if m_steps and m_loss:
+                    print_training_summary(m_steps, m_loss, m_lr if m_lr else None)
+                    try:
+                        png_path = perm_dir / f"{lora_name}_training_chart.png"
+                        generate_png_chart(
+                            m_steps,
+                            m_loss,
+                            m_lr if m_lr else None,
+                            png_path,
+                            title=f"Training: {lora_name} ({perm_name})",
+                        )
+                        print(f"  Chart saved -> {png_path.name}")
+                    except ImportError:
+                        logger.warning(
+                            "matplotlib not installed — skip PNG chart"
+                        )
+
                 # Post-training evaluation for this permutation
                 if eval_config is not None:
                     print(f"  --- Running evaluation for {perm_name} ---")
@@ -856,6 +1026,13 @@ def _run_matrix(args: Any, dataset_path: Path, lora_name: str) -> None:
 
     print(f"\nMatrix finished: {completed} completed, {failed} failed")
     print(f"Output: {output_base}")
+
+    # Write master matrix config artifact
+    _write_training_config(
+        output_base, lora_name, base_params,
+        mode="matrix",
+        param_ranges=param_ranges,
+    )
 
     if failed > 0 and completed == 0:
         sys.exit(1)
