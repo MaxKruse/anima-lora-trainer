@@ -1,6 +1,6 @@
 """Dataset validation for LoRA training.
 
-Checks image counts, caption coverage, and writes validation markers.
+Checks folder structure, image counts, caption coverage, and writes validation markers.
 """
 
 import json
@@ -28,13 +28,14 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def get_dataset_img_dir(dataset_dir: str) -> Path:
+    """Get the dataset's image directory (<dataset>/img/)."""
+    return Path(dataset_dir).resolve() / "img"
+
+
 def get_dataset_out_dir(dataset_dir: str) -> Path:
-    """Get the dataset's output directory (datasets/<name>/out/)."""
-    dataset_dir_path = Path(dataset_dir).resolve()
-    parent = dataset_dir_path.parent
-    if parent.name == "img":
-        parent = parent.parent
-    return parent / "out"
+    """Get the dataset's output directory (<dataset>/out/)."""
+    return Path(dataset_dir).resolve() / "out"
 
 
 def get_validation_marker_path(dataset_dir: str) -> Path:
@@ -49,7 +50,8 @@ def check_validation(dataset_dir: str) -> bool:
         return False
     try:
         data = json.loads(marker.read_text())
-        if data.get("dataset") != str(Path(dataset_dir).resolve()):
+        expected_img = str(get_dataset_img_dir(dataset_dir))
+        if data.get("dataset") != expected_img:
             return False
         return True
     except (json.JSONDecodeError, KeyError):
@@ -71,7 +73,7 @@ def write_validation_marker(
     total_captions = sum(s.get("num_captions", 0) for s in subsets)
 
     marker_data: dict[str, Any] = {
-        "dataset": str(Path(dataset_dir).resolve()),
+        "dataset": str(get_dataset_img_dir(dataset_dir)),
         "validated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "total_images": total_images,
         "total_captions": total_captions,
@@ -85,7 +87,7 @@ def write_validation_marker(
             for s in subsets
         ],
         "params": {
-            "max_steps": params.get("max_steps", 800),
+            "max_steps": params.get("max_steps", 600),
             "batch_size": params.get("batch_size", 4),
         },
         "warnings": warnings,
@@ -95,24 +97,25 @@ def write_validation_marker(
     return marker_path
 
 
-def calculate_max_steps(batch_size: int = 4) -> int:
-    """Calculate auto max_steps based on batch size.
+def calculate_max_steps(batch_size: int = 4, training_type: str = "character") -> int:
+    """Calculate auto max_steps based on batch size and training type.
 
-    Higher batch sizes converge faster, so they need fewer total steps.
-    Scaling is slightly less than linear to keep theoretical training
-    stable across batch sizes.
+    Character training (bs=4): 600 steps
+    Style training (bs=4): 1200 steps (2x character)
 
-      batch_size=4 -> max_steps=600  (default, sweet spot)
-      batch_size=3 -> max_steps=800
-      batch_size=2 -> max_steps=1000
-      batch_size=1 -> max_steps=1600
+    Scaling with batch size (slightly less than linear):
+      Character: bs4=600, bs3=800, bs2=1000, bs1=1600
+      Style:     bs4=1200, bs3=1600, bs2=2000, bs1=3200
     """
-    return {
+    character_steps = {
         4: 600,
         3: 800,
         2: 1000,
         1: 1600,
     }.get(batch_size, 600)
+
+    multiplier = 2 if training_type == "style" else 1
+    return character_steps * multiplier
 
 
 def calculate_repeats(
@@ -134,33 +137,47 @@ def calculate_repeats(
 
 
 def validate_dataset(
-    image_dir: str,
+    dataset_dir: str,
     batch_size: int = 4,
 ) -> tuple[bool, list[str]]:
     """Validate a training dataset.
 
-    Returns (is_valid, warnings) tuple. is_valid is False for hard errors
-    (missing directory, no images, no captions). Warnings are collected
-    for non-fatal issues.
+    Expects the dataset directory to contain:
+      <dataset>/img/   - training images and .txt captions
+      <dataset>/out/   - output directory (created if missing)
 
-    Rules:
-      - Each folder: 10-25 images (warnings outside this range)
-      - Total: 25 (base) + 15 x N_outfits is the max recommended
-      - NO captions at all = hard error
-      - Some missing captions = warning
+    Returns (is_valid, warnings) tuple. is_valid is False for hard errors.
+    Warnings are collected for non-fatal issues.
     """
-    path = Path(image_dir)
+    path = Path(dataset_dir).resolve()
     warnings: list[str] = []
 
     if not path.exists():
-        return False, ["Directory does not exist"]
+        return False, [f"Directory does not exist: {path}"]
     if not path.is_dir():
-        return False, ["Not a directory"]
+        return False, [f"Not a directory: {path}"]
 
-    subsets = discover_subsets(image_dir)
+    # ── Check folder structure ─────────────────────────────────────────
+    img_dir = path / "img"
+    out_dir = path / "out"
+
+    if not img_dir.exists():
+        print(f"\n  ERROR: Missing 'img/' subdirectory in dataset folder.", file=sys.stderr)
+        print(f"\n  Expected structure:", file=sys.stderr)
+        print(f"    {path}/", file=sys.stderr)
+        print(f"      img/     <- training images + .txt captions", file=sys.stderr)
+        print(f"      out/     <- training output (created automatically)", file=sys.stderr)
+        return False, ["Missing img/ subdirectory"]
+
+    if not out_dir.exists():
+        out_dir.mkdir(parents=True, exist_ok=True)
+        print(f"  Created output directory: {out_dir}")
+
+    # ── Validate images in img/ ────────────────────────────────────────
+    subsets = discover_subsets(str(img_dir))
 
     if not subsets:
-        return False, ["No image files found"]
+        return False, ["No image files found in img/"]
 
     total_images = sum(s["num_images"] for s in subsets)
     total_captions = sum(s.get("num_captions", 0) for s in subsets)
@@ -172,29 +189,31 @@ def validate_dataset(
     for s in subsets:
         folder = Path(s["image_dir"])
         rel = (
-            folder.relative_to(path)
-            if str(folder).startswith(str(path))
+            folder.relative_to(img_dir)
+            if str(folder).startswith(str(img_dir))
             else folder.name
         )
+        rel_str = str(rel) if str(rel) != "." else ""
         img_count = s["num_images"]
         cap_count = s.get("num_captions", 0)
         cap_status = (
             "\u2713" if cap_count >= img_count
             else f"\u26a0 {cap_count}/{img_count} captions"
         )
-        print(f"  {rel}/  \u2014  {img_count} images, {cap_status}")
+        folder_label = f"img/{rel_str}/" if rel_str else "img/"
+        print(f"  {folder_label}  \u2014  {img_count} images, {cap_status}")
 
         max_allowed = MAX_IMAGES_BASE if is_base else MIN_IMAGES_PER_OUTFIT
 
         if img_count < MIN_IMAGES_PER_FOLDER:
             msg = (
-                f"{rel}/ has only {img_count} images "
+                f"{folder_label} has only {img_count} images "
                 f"(recommended min: {MIN_IMAGES_PER_FOLDER})"
             )
             warnings.append(msg)
         elif img_count > max_allowed:
             msg = (
-                f"{rel}/ has {img_count} images "
+                f"{folder_label} has {img_count} images "
                 f"(recommended max: {max_allowed})"
             )
             warnings.append(msg)
@@ -219,7 +238,7 @@ def validate_dataset(
     # ── Caption checks ─────────────────────────────────────────────────
     if total_captions == 0:
         return False, [
-            "No caption files found — every image needs a .txt caption"
+            "No caption files found in img/ \u2014 every image needs a .txt caption"
         ]
     elif total_captions < total_images:
         missing = total_images - total_captions
@@ -233,8 +252,8 @@ def validate_dataset(
     auto_max_steps = calculate_max_steps(batch_size)
     params: dict[str, Any] = {"max_steps": auto_max_steps, "batch_size": batch_size}
     marker_path = write_validation_marker(
-        image_dir, subsets, params, warnings
+        dataset_dir, subsets, params, warnings
     )
-    print("\n  \u2713 Validated")
+    print(f"\n  \u2713 Validated -> {marker_path}")
 
     return True, warnings

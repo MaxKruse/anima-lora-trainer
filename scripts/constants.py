@@ -5,13 +5,37 @@ from pathlib import Path
 # ── Project root ─────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# ── Defaults ─────────────────────────────────────────────────────────────
-DEFAULTS = {
+# ── Character training defaults ──────────────────────────────────────────
+CHARACTER_DEFAULTS = {
     "network_dim": 8,
     "network_alpha": 1,
     "learning_rate": 0.0002,
     "batch_size": 4,
-    "max_steps": 600,
+    "max_steps": 600,          # auto-scaled from batch_size
+    "optimizer": "AdamW8Bit",
+    "scheduler": "cosine",
+    "resolution": 1024,
+    "mixed_precision": "bf16",
+    "timestep_sampling": "sigmoid",
+    "gradient_checkpointing": True,
+    "cache_latents": True,
+    "cache_text_encoder": False,
+    "caption_tag_dropout_rate": 0.1,
+    "keep_tokens": 1,
+    "rebalance_buckets": True,
+}
+
+# ── Style training defaults ─────────────────────────────────────────────
+# Same as character but: half LR, double steps, higher dim
+STYLE_DEFAULTS = {
+    **CHARACTER_DEFAULTS,
+    "network_dim": 16,
+    "learning_rate": 0.0001,
+    "max_steps": 1200,         # auto-scaled from batch_size (2x character)
+}
+
+# ── Shared defaults (used by args that don't vary by type) ───────────────
+SHARED_DEFAULTS = {
     "optimizer": "AdamW8Bit",
     "scheduler": "cosine",
     "resolution": 1024,

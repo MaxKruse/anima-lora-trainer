@@ -1,12 +1,12 @@
-"""Unified LoRA training CLI — single and matrix modes.
+"""LoRA training CLI — character and style modes.
 
 Entry point that orchestrates validation, dataset config generation,
 and in-process kohya-ss training.
 
 Usage:
-    uv run python scripts/train.py --validate --dataset datasets/froot/img
-    uv run python scripts/train.py --dataset datasets/froot/img --name Froot-Anima
-    uv run python scripts/train.py --mode matrix --dataset datasets/froot/img --name Froot --network-dim 16,32 --alpha 1,16
+    uv run python scripts/train.py --type character --dataset datasets/emiru/ --validate
+    uv run python scripts/train.py --type character --dataset datasets/emiru/ --name Emiru
+    uv run python scripts/train.py --type style --dataset datasets/blobcg/ --name BlobCG-Style
 """
 
 import json
@@ -16,7 +16,6 @@ import random
 import sys
 import time
 import traceback
-from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -38,13 +37,13 @@ from scripts.cli_args import (
     build_parser,
     ensure_dataset,
     parse_params,
-    parse_param_ranges,
 )
 from scripts.constants import (
-    DEFAULTS,
+    CHARACTER_DEFAULTS,
     IMAGE_EXTENSIONS,
     MODEL_PATHS,
     PROJECT_ROOT,
+    STYLE_DEFAULTS,
 )
 from scripts.dataset_toml import (
     discover_subsets,
@@ -54,6 +53,7 @@ from scripts.validation import (
     calculate_max_steps,
     calculate_repeats,
     check_validation,
+    get_dataset_img_dir,
     get_dataset_out_dir,
     validate_dataset,
 )
@@ -92,55 +92,15 @@ def generate_job_id() -> str:
     return f"job-{ts}-{suffix}"
 
 
-def generate_permutations(param_dict: dict[str, list[Any]]) -> list[dict[str, Any]]:
-    """Generate Cartesian product of parameter lists."""
-    if not param_dict:
-        return [{}]
-    keys = list(param_dict.keys())
-    values = [param_dict[k] for k in keys]
-    return [dict(zip(keys, combo)) for combo in product(*values)]
-
-
 def build_output_dir(dataset_dir: str, output_base: str | None) -> Path:
-    """Build the output directory path (no job_id nesting)."""
-    dataset_dir_path = Path(dataset_dir).resolve()
+    """Build the output directory path.
+
+    Default: <dataset>/out/
+    Override with --output flag.
+    """
     if output_base:
         return Path(output_base)
-    datasets_parent = dataset_dir_path.parent
-    if datasets_parent.name == "img":
-        datasets_parent = datasets_parent.parent
-    return datasets_parent / "out"
-
-
-def _perm_suffix(perm: dict[str, Any]) -> str:
-    """Build a short filename suffix from permutation params, e.g. 'lr-0.0001-bs-2'."""
-    aliases: dict[str, str] = {
-        "learning_rate": "lr",
-        "batch_size": "bs",
-        "network_dim": "dim",
-        "network_alpha": "alpha",
-        "max_steps": "steps",
-        "optimizer": "opt",
-        "scheduler": "sched",
-        "resolution": "res",
-    }
-    parts: list[str] = []
-    for k, v in perm.items():
-        short = aliases.get(k, k)
-        parts.append(f"{short}-{v}")
-    return "-".join(parts)
-
-
-def _copy_final_model(perm_dir: Path, output_base: Path, lora_name: str, perm: dict[str, Any]) -> None:
-    """Copy the final .safetensors from a working dir to the output folder."""
-    final_model = perm_dir / f"{lora_name}.safetensors"
-    if not final_model.exists():
-        return
-    suffix = _perm_suffix(perm)
-    name = f"{lora_name}-{suffix}.safetensors" if suffix else f"{lora_name}.safetensors"
-    dest = output_base / name
-    dest.write_bytes(final_model.read_bytes())
-    logger.info("Copied final model: %s", dest.name)
+    return get_dataset_out_dir(dataset_dir)
 
 
 def _build_cli_command() -> str:
@@ -149,18 +109,20 @@ def _build_cli_command() -> str:
     return " ".join(f'"{arg}"' if " " in arg else arg for arg in sys.argv)
 
 
-def _build_config_from_params(params: dict[str, Any]) -> dict[str, Any]:
-    """Build the common training config dict from effective params."""
-    auto_max = calculate_max_steps(params.get("batch_size", 4))
-    effective_steps = params.get("max_steps", auto_max)
+def _build_config_from_params(params: dict[str, Any], training_type: str) -> dict[str, Any]:
+    """Build the training config dict from effective params."""
+    batch_size = params.get("batch_size", 4)
+    auto_max = calculate_max_steps(batch_size, training_type)
+    effective_steps = params.get("max_steps") or auto_max
 
     return {
+        "training_type": training_type,
         "network_dim": params.get("network_dim"),
         "network_alpha": params.get("network_alpha"),
         "learning_rate": params.get("learning_rate"),
         "batch_size": params.get("batch_size"),
         "max_steps": effective_steps,
-        "max_steps_auto": effective_steps == auto_max,
+        "max_steps_auto": params.get("max_steps") is None,
         "optimizer": params.get("optimizer"),
         "scheduler": params.get("scheduler"),
         "resolution": params.get("resolution"),
@@ -172,7 +134,7 @@ def _build_config_from_params(params: dict[str, Any]) -> dict[str, Any]:
         "caption_tag_dropout_rate": params.get("caption_tag_dropout_rate"),
         "keep_tokens": params.get("keep_tokens"),
         "repeats": params.get("repeats"),
-        "rebalance_buckets": params.get("rebalance_buckets", DEFAULTS["rebalance_buckets"]),
+        "rebalance_buckets": params.get("rebalance_buckets", True),
         "bucket_dominance_threshold": params.get("bucket_dominance_threshold"),
         "bucket_rebalance_max_aug": params.get("bucket_rebalance_max_aug"),
         "bucket_rebalance_seed": params.get("bucket_rebalance_seed"),
@@ -183,31 +145,18 @@ def _write_training_config(
     output_dir: Path,
     lora_name: str,
     params: dict[str, Any],
-    *,
-    mode: str = "single",
-    param_ranges: dict[str, list[Any]] | None = None,
+    training_type: str,
 ) -> None:
-    """Write a reproducibility config artifact (training_config.json).
-
-    For single mode: writes to output_dir (the final output base).
-    For matrix mode: writes per-permutation configs inside perm dirs,
-    and a master config at the matrix output base.
-
-    Records all effective parameters, the exact CLI command, and (for matrix)
-    the full param ranges so the run is fully reproducible.
-    """
+    """Write a reproducibility config artifact (training_config.json)."""
     config: dict[str, Any] = {
-        "mode": mode,
         "lora_name": lora_name,
+        "training_type": training_type,
         "training_images": params.get("training_images"),
         "output_dir": str(output_dir),
         "cli_command": _build_cli_command(),
-        "params": _build_config_from_params(params),
+        "params": _build_config_from_params(params, training_type),
         "training_completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-
-    if mode == "matrix" and param_ranges is not None:
-        config["param_ranges"] = {k: list(v) for k, v in param_ranges.items()}
 
     config_path = output_dir / "training_config.json"
     _write_json(config_path, config)
@@ -227,18 +176,10 @@ def _count_images_in_dir(image_dir: str) -> int:
 
 
 def _find_latest_state_dir(perm_dir: Path, lora_name: str) -> Path | None:
-    """Find the latest accelerator state directory for resume.
-
-    kohya-ss saves state dirs like:
-      {output_dir}/{output_name}-step{NNNNNNNN}-state/
-      {output_dir}/{output_name}-state/  (final)
-
-    Returns the path to the latest state dir, or None if not found.
-    """
+    """Find the latest accelerator state directory for resume."""
     if not perm_dir.exists():
         return None
 
-    # Look for step-based state dirs: {lora_name}-step{NNNNNNNN}-state
     pattern_prefix = f"{lora_name}-step"
     suffix = "-state"
     state_dirs = [
@@ -248,11 +189,9 @@ def _find_latest_state_dir(perm_dir: Path, lora_name: str) -> Path | None:
         and d.name.endswith(suffix)
     ]
     if state_dirs:
-        # Sort by name (step number is zero-padded, so lexicographic works)
         state_dirs.sort(key=lambda d: d.name)
         return state_dirs[-1]
 
-    # Fallback: final state dir
     final_state = perm_dir / f"{lora_name}-state"
     if final_state.is_dir():
         return final_state
@@ -261,28 +200,19 @@ def _find_latest_state_dir(perm_dir: Path, lora_name: str) -> Path | None:
 
 
 def _is_incomplete(perm_dir: Path) -> bool:
-    """Check if a permutation run is incomplete (has no final model)."""
+    """Check if a run is incomplete (has no final model)."""
     manifest = perm_dir / "job_manifest.json"
     if not manifest.exists():
         return False
     try:
         data = json.loads(manifest.read_text())
-        status = data.get("status", "")
-        # "running" means aborted mid-run, "failed"/"cancelled" are incomplete
-        return status in ("running", "failed", "cancelled")
+        return data.get("status", "") in ("running", "failed", "cancelled")
     except (json.JSONDecodeError, OSError):
         return False
 
 
 def _get_resume_info(perm_dir: Path, lora_name: str) -> dict[str, Any]:
-    """Get resume info for an incomplete run.
-
-    Returns dict with:
-      - incomplete: bool
-      - current_step: int
-      - total_steps: int
-      - state_dir: Path | None
-    """
+    """Get resume info for an incomplete run."""
     manifest = perm_dir / "job_manifest.json"
     if not manifest.exists():
         return {"incomplete": False, "current_step": 0, "total_steps": 0, "state_dir": None}
@@ -306,14 +236,7 @@ def _get_resume_info(perm_dir: Path, lora_name: str) -> dict[str, Any]:
 
 # ── In-process training ──────────────────────────────────────────────────
 class _TqdmProgressWrapper(tqdm):
-    """Wrapper around tqdm that tracks progress and checks for cancel signals.
-
-    NOTE: This replaces the global tqdm.tqdm class during training so that
-    kohya-ss's internal progress bars use our wrapper. This is a deliberate
-    monkey-patch because kohya-ss does not expose a callback hook for
-    step-level progress. The original tqdm class is restored in the
-    ``finally`` block of ``run_single_training``.
-    """
+    """Wrapper around tqdm that tracks progress and checks for cancel signals."""
     _callbacks: list[Any] = []
     _cancel_path: Path | None = None
 
@@ -346,21 +269,13 @@ _original_save_fn: Any = None
 
 
 def _calculate_save_steps(max_steps: int) -> list[int]:
-    """Calculate checkpoint save steps at specific percentages.
-
-    Saves at 50%, 75% of training (final 100% is handled by kohya-ss).
-    """
+    """Calculate checkpoint save steps at 50% and 75%."""
     percentages = [0.50, 0.75]
     return [max(1, int(round(max_steps * p))) for p in percentages]
 
 
 def _compute_save_interval(max_steps: int) -> int:
-    """Compute a save interval that hits all configured save points.
-
-    Returns the GCD of (save_point_50p, save_point_75p, max_steps).
-    kohya-ss calls the save function at every N steps where N is this interval.
-    The monkey-patch then filters to only the configured save points.
-    """
+    """Compute a save interval that hits all configured save points."""
     from math import gcd
     save_points = _calculate_save_steps(max_steps)
     interval = max_steps
@@ -370,24 +285,16 @@ def _compute_save_interval(max_steps: int) -> int:
 
 
 def _cleanup_extra_checkpoints(output_dir: Path, lora_name: str, max_steps: int) -> None:
-    """Remove checkpoint files that aren't at configured save points.
-
-    Keeps:
-      - Checkpoints at save point steps (e.g., {name}-step000250.safetensors)
-      - Final model ({name}.safetensors)
-      - State directories (for resume)
-    """
+    """Remove checkpoint files that aren't at configured save points."""
     keep_steps = set(_calculate_save_steps(max_steps)) | {max_steps}
     step_pattern = f"{lora_name}-step"
 
     for entry in output_dir.iterdir():
         name = entry.name
-        # Skip state directories, final model, non-model files
         if name.endswith("-state") or name == f"{lora_name}.safetensors":
             continue
         if not name.startswith(step_pattern) or not name.endswith(".safetensors"):
             continue
-        # Extract step number from {name}-step{NNNNNNNN}.safetensors
         try:
             step_str = name[len(step_pattern) : -len(".safetensors")]
             step = int(step_str)
@@ -399,16 +306,7 @@ def _cleanup_extra_checkpoints(output_dir: Path, lora_name: str, max_steps: int)
 
 
 def _setup_save_filter() -> bool:
-    """Monkey-patch kohya-ss model save to only save at configured steps.
-
-    kohya-ss only supports uniform save_every_n_steps intervals.
-    We set a small interval and patch the save function to only write
-    checkpoints at 50% and 75%. At the 50% step we also save accelerator
-    state for recovery.
-
-    Must be called after kohya-ss modules are imported.
-    Returns True if the patch was applied successfully.
-    """
+    """Monkey-patch kohya-ss model save to only save at configured steps."""
     global _original_save_fn
 
     try:
@@ -421,8 +319,6 @@ def _setup_save_filter() -> bool:
 
     _original_save_fn = anima_train_utils.save_anima_model_on_epoch_end_or_stepwise
 
-    # Signature: (args, on_epoch_end, accelerator, save_dtype, epoch,
-    #             num_train_epochs, global_step, dit)
     def _filtered_save(*args: Any, **kwargs: Any) -> None:
         global _50p_step_global
         global_step = kwargs.get("global_step", args[6] if len(args) > 6 else 0)
@@ -430,12 +326,10 @@ def _setup_save_filter() -> bool:
 
         if global_step in _save_points:
             _original_save_fn(*args, **kwargs)  # type: ignore[misc]
-            # Save accelerator state at the 50% step for recovery
             if (accelerator is not None
                     and abs(global_step - _50p_step_global) <= 2):
                 logger.info("Saving accelerator state at step %d (50%%)", global_step)
                 accelerator.save_state()
-        # Skip — not a configured save point
 
     anima_train_utils.save_anima_model_on_epoch_end_or_stepwise = _filtered_save
     return True
@@ -453,21 +347,11 @@ def _restore_save() -> None:
         _original_save_fn = None
 
 
-# Shared step tracker (synced by _on_step callback)
 _current_step_global = 0
 
 
 def _build_kohya_args(params: dict[str, Any], kohya_parser: Any, tb_logs_dir: Path) -> Any:
-    """Build a full kohya-ss Namespace using parser defaults + overrides.
-
-    Args:
-        params: Training parameters dict.
-        kohya_parser: The kohya-ss argument parser.
-        tb_logs_dir: Directory for TensorBoard events (enables step-level logging).
-
-    Returns:
-        kohya-ss args Namespace and the tb_logs_dir for post-training parsing.
-    """
+    """Build a full kohya-ss Namespace using parser defaults + overrides."""
     p = params
     args = kohya_parser.parse_args([])
     args.pretrained_model_name_or_path = MODEL_PATHS["diffusion_model"]
@@ -488,10 +372,6 @@ def _build_kohya_args(params: dict[str, Any], kohya_parser: Any, tb_logs_dir: Pa
     args.discrete_flow_shift = 1.0
     args.mixed_precision = p["mixed_precision"]
     args.max_train_steps = p["max_steps"]
-    # Checkpoints at 50%, 75% via monkey-patched save function.
-    # Compute an interval (GCD of save points + max_steps) so kohya-ss calls the save
-    # function exactly at our configured steps — no extra saves to clean up.
-    # State saved at 50% step inside the patch (for recovery). Final state save disabled.
     args.save_every_n_steps = _compute_save_interval(p["max_steps"])
     args.save_state = False
     args.gradient_checkpointing = p.get("gradient_checkpointing", True)
@@ -500,12 +380,9 @@ def _build_kohya_args(params: dict[str, Any], kohya_parser: Any, tb_logs_dir: Pa
     args.network_train_unet_only = p.get("cache_text_encoder", False)
     args.vae_chunk_size = 64
     args.vae_disable_cache = True
-    # Enable TensorBoard logging so kohya-ss writes per-step metrics (loss, LR)
-    # to an events file we parse after training.
     tb_logs_dir.mkdir(parents=True, exist_ok=True)
     args.logging_dir = str(tb_logs_dir)
     args.log_with = "tensorboard"
-    # Resume from existing state if provided
     resume_path = p.get("resume")
     if resume_path:
         args.resume = str(resume_path)
@@ -513,12 +390,7 @@ def _build_kohya_args(params: dict[str, Any], kohya_parser: Any, tb_logs_dir: Pa
 
 
 def _reset_kohya_global_state() -> None:
-    """Reset kohya-ss global singleton state between in-process training runs.
-
-    kohya-ss uses class-level _strategy singletons in strategy_base that are
-    set once and refuse to be overwritten. After each training run these must
-    be cleared so the next run can set fresh strategies.
-    """
+    """Reset kohya-ss global singleton state between in-process training runs."""
     try:
         from library import strategy_base
         strategy_base.TokenizeStrategy._strategy = None
@@ -526,7 +398,6 @@ def _reset_kohya_global_state() -> None:
         strategy_base.TextEncodingStrategy._strategy = None
         strategy_base.TextEncoderOutputsCachingStrategy._strategy = None
     except ImportError:
-        # First run — modules not yet imported
         pass
 
 
@@ -536,11 +407,6 @@ def run_single_training(
     job_id: str,
     resume: Path | None = None,
 ) -> dict[str, Any]:
-    """Run a single training job in-process.
-
-    Returns a dict with keys: status, output_dir, exit_code, error,
-    and (on success) metrics_steps, metrics_loss, metrics_lr.
-    """
     """Run a single training job in-process."""
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "job_manifest.json"
@@ -565,14 +431,13 @@ def run_single_training(
     total_images = sum(s["num_images"] for s in subsets)
     batch_size = params.get("batch_size", 4)
 
-    # Auto-calculate max_steps from batch_size (unless user explicitly set a different value)
-    auto_max = calculate_max_steps(batch_size)
-    if params.get("max_steps", auto_max) == DEFAULTS["max_steps"]:
+    # Auto-calculate max_steps from batch_size and type
+    training_type = params.get("training_type", "character")
+    auto_max = calculate_max_steps(batch_size, training_type)
+    if params.get("max_steps") is None:
         params["max_steps"] = auto_max
 
     manual_repeats = params.get("repeats")
-
-    # Auto-calculate repeats: target ~12 steps_per_epoch (10-15 range)
     base_repeats = manual_repeats if manual_repeats is not None else calculate_repeats(total_images, batch_size)
 
     subset_configs: list[dict[str, Any]] = [
@@ -597,17 +462,15 @@ def run_single_training(
             logger.info("  subset %d: %s (%d images, repeats=%d)", i, Path(sub["image_dir"]).name, img_count, sub["num_repeats"])
         subset_configs = rebalance_subsets
     else:
-        logger.info("Bucket rebalance: skipped — using original subsets")
-
-    num_repeats = base_repeats
+        logger.info("Bucket rebalance: skipped \u2014 using original subsets")
 
     # Generate dataset TOML
     dataset_toml_path = output_dir / "dataset.toml"
     generate_dataset_toml(
         batch_size=params["batch_size"],
         num_images=total_images,
-        epochs=4,  # unused by toml generator, kept for API compat
-        num_repeats=num_repeats,
+        epochs=4,
+        num_repeats=base_repeats,
         output_path=str(dataset_toml_path),
         resolution=params.get("resolution", 1024),
         cache_text_encoder_outputs=params.get("cache_text_encoder", False),
@@ -635,8 +498,6 @@ def run_single_training(
     avg_loss: float | None = None
     error_message: str | None = None
     cancel_path = _project_root / "jobs" / f"{job_id}.cancel"
-
-    # TensorBoard logs dir — kohya-ss writes per-step metrics here
     tb_logs_dir = output_dir / ".tb_logs"
 
     def _on_step(step: int, bar: Any) -> None:
@@ -669,7 +530,6 @@ def run_single_training(
 
         train_util.verify_command_line_training_args(args)
 
-        # Setup custom save points: checkpoints at 50%, 75%; state at 50%
         _save_points.clear()
         _save_points.update(_calculate_save_steps(params["max_steps"]))
         _50p_step_global = max(1, int(round(params["max_steps"] * 0.5)))
@@ -689,11 +549,9 @@ def run_single_training(
         logger.debug("Traceback:\n%s", traceback.format_exc())
         exit_code = 1
     finally:
-        # Restore original kohya-ss save function
         _restore_save()
         _save_points.clear()
 
-        # Clean up extra checkpoint files (keep only save points + final model)
         try:
             _cleanup_extra_checkpoints(output_dir, params["lora_name"], params["max_steps"])
         except Exception:
@@ -710,7 +568,7 @@ def run_single_training(
         if error_message:
             manifest["error"] = error_message
         _write_json(manifest_path, manifest)
-        # Free GPU memory for subsequent matrix jobs
+
         try:
             import torch
             if torch.cuda.is_available():
@@ -721,7 +579,6 @@ def run_single_training(
         if cancel_path.exists():
             cancel_path.unlink(missing_ok=True)
 
-        # Parse TensorBoard events for per-step metrics (loss + LR)
         m_steps, m_loss, m_lr = parse_tensorboard_events(tb_logs_dir)
 
         return {
@@ -736,10 +593,13 @@ def run_single_training(
 
 
 # ── CLI main ─────────────────────────────────────────────────────────────
-def _run_single(args: Any, dataset_path: Path, lora_name: str) -> None:
+def _run_training(args: Any, dataset_path: Path, lora_name: str, training_type: str) -> None:
     """Execute a single training run."""
-    output_base = build_output_dir(args.dataset, args.output)
+    output_base = build_output_dir(str(dataset_path), args.output)
     output_base.mkdir(parents=True, exist_ok=True)
+
+    # Resolve image directory
+    img_dir = get_dataset_img_dir(str(dataset_path))
 
     # Abort if the final model already exists at the output path
     existing_model = output_base / f"{lora_name}.safetensors"
@@ -748,15 +608,16 @@ def _run_single(args: Any, dataset_path: Path, lora_name: str) -> None:
         print(f"  Remove it or use --name / --output to choose a different path.", file=sys.stderr)
         sys.exit(1)
 
-    # Use a .work subdirectory for intermediate files, final model goes to output_base
+    # Use a .work subdirectory for intermediate files
     work_dir = output_base / ".work"
 
-    params = parse_params(args)
+    params = parse_params(args, training_type)
     params.update({
         "lora_name": lora_name,
-        "training_images": str(dataset_path),
+        "training_images": str(img_dir),
         "output_dir": str(work_dir),
         "job_id": lora_name,
+        "training_type": training_type,
     })
 
     (_project_root / "jobs").mkdir(exist_ok=True)
@@ -774,21 +635,39 @@ def _run_single(args: Any, dataset_path: Path, lora_name: str) -> None:
             )
         else:
             logger.warning(
-                "Incomplete run (step %d/%d) but no state dir found — restarting",
+                "Incomplete run (step %d/%d) but no state dir found \u2014 restarting",
                 resume_info["current_step"], resume_info["total_steps"],
             )
 
-    logger.info("Starting training: %s", lora_name)
+    # Print effective params
+    effective_steps = params.get("max_steps") or calculate_max_steps(
+        params.get("batch_size", 4), training_type
+    )
+    type_label = "style" if training_type == "style" else "character"
+    logger.info(
+        "Starting %s training: %s (dim=%d, lr=%.4f, steps=%d, bs=%d)",
+        type_label, lora_name,
+        params.get("network_dim", 8),
+        params.get("learning_rate", 0.0002),
+        effective_steps,
+        params.get("batch_size", 4),
+    )
 
     result = run_single_training(params, work_dir, lora_name, resume=resume_path)
     if result["status"] == "completed":
-        _copy_final_model(work_dir, output_base, lora_name, {})
+        # Copy final model from work dir to output base
+        final_model = work_dir / f"{lora_name}.safetensors"
+        if final_model.exists():
+            dest = output_base / f"{lora_name}.safetensors"
+            dest.write_bytes(final_model.read_bytes())
+            logger.info("Copied final model: %s", dest.name)
+
         print(f"\n\u2713 Training completed -> {output_base / (lora_name + '.safetensors')}")
 
         # Write reproducibility config artifact
-        _write_training_config(output_base, lora_name, params, mode="single")
+        _write_training_config(output_base, lora_name, params, training_type)
 
-        # Training metrics chart — ASCII in terminal + PNG in output folder
+        # Training metrics chart
         _steps = result.get("metrics_steps", [])
         _loss = result.get("metrics_loss", [])
         _lr = result.get("metrics_lr", [])
@@ -806,235 +685,16 @@ def _run_single(args: Any, dataset_path: Path, lora_name: str) -> None:
                 print(f"  Chart saved -> {png_path}")
             except ImportError:
                 logger.warning(
-                    "matplotlib not installed — skip PNG chart. Install with: uv add matplotlib"
+                    "matplotlib not installed \u2014 skip PNG chart. Install with: uv add matplotlib"
                 )
 
         # Post-training evaluation
         if args.evaluate:
             print(f"\n--- Running evaluation ---")
             eval_config = load_eval_config(args.eval_config)
-            run_evaluation(eval_config, str(dataset_path), str(work_dir))
+            run_evaluation(eval_config, str(img_dir), str(work_dir))
     else:
         print(f"\n\u2717 Training {result['status']}: exit code {result.get('exit_code')}", file=sys.stderr)
-        sys.exit(1)
-
-
-def _run_matrix(args: Any, dataset_path: Path, lora_name: str) -> None:
-    """Execute a matrix training run (all permutations)."""
-    output_base = build_output_dir(args.dataset, args.output)
-    output_base.mkdir(parents=True, exist_ok=True)
-
-    all_param_ranges = parse_param_ranges(args, include_single=True)
-    param_ranges = {k: v for k, v in all_param_ranges.items() if len(v) > 1}
-    if not param_ranges:
-        print("ERROR: Matrix mode requires at least one parameter with multiple values (comma-separated).", file=sys.stderr)
-        sys.exit(1)
-
-    permutations = generate_permutations(param_ranges)
-
-    # Load eval config and pick shared caption if --evaluate is set
-    eval_config: dict[str, Any] | None = None
-    eval_caption: str | None = None
-    if args.evaluate:
-        eval_config = load_eval_config(args.eval_config)
-        eval_caption = pick_caption(str(dataset_path))
-        logger.info("Eval caption (shared across matrix): %s", eval_caption[:80])
-
-    base_params: dict[str, Any] = {
-        "network_dim": int(all_param_ranges["network_dim"][0]),
-        "network_alpha": float(all_param_ranges["network_alpha"][0]),
-        "learning_rate": float(all_param_ranges["learning_rate"][0]),
-        "batch_size": int(all_param_ranges["batch_size"][0]),
-        "max_steps": int(all_param_ranges["max_steps"][0]),
-        "optimizer": str(all_param_ranges["optimizer"][0]),
-        "scheduler": str(all_param_ranges["scheduler"][0]),
-        "resolution": int(all_param_ranges["resolution"][0]),
-        "mixed_precision": args.mixed_precision,
-        "timestep_sampling": args.timestep_sampling,
-        "gradient_checkpointing": not args.no_gradient_checkpointing,
-        "cache_latents": not args.no_cache_latents,
-        "cache_text_encoder": args.cache_text_encoder,
-        "caption_tag_dropout_rate": args.caption_dropout,
-        "keep_tokens": args.keep_tokens,
-        "repeats": args.repeats,
-        "rebalance_buckets": args.rebalance_buckets,
-        "bucket_dominance_threshold": args.bucket_dominance_threshold,
-        "bucket_rebalance_max_aug": args.bucket_rebalance_max_aug,
-        "bucket_rebalance_seed": args.bucket_rebalance_seed,
-    }
-    base_params.update({
-        "lora_name": lora_name,
-        "training_images": str(dataset_path),
-        "job_id": "matrix",
-    })
-
-    manifest_path = output_base / "manifest.json"
-
-    # Load existing manifest if resuming or if one exists (auto-resume)
-    existing_manifest: dict[str, Any] | None = None
-    if manifest_path.exists():
-        try:
-            existing_manifest = json.loads(manifest_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    if existing_manifest is not None:
-        manifest = existing_manifest
-        logger.info("Loaded existing manifest: %d completed, %d failed, %d total",
-                     manifest.get("completed", 0), manifest.get("failed", 0), manifest.get("total", 0))
-    else:
-        manifest: dict[str, Any] = {
-            "mode": "matrix",
-            "param_ranges": {k: list(v) for k, v in param_ranges.items()},
-            "total": len(permutations),
-            "completed": 0,
-            "failed": 0,
-            "cancelled": 0,
-            "permutations": [
-                {"params": perm, "status": "pending", "output_dir": None, "error": None}
-                for perm in permutations
-            ],
-        }
-
-    (_project_root / "jobs").mkdir(exist_ok=True)
-
-    # Count already-completed from existing manifest
-    completed = manifest.get("completed", 0)
-    failed = manifest.get("failed", 0)
-    cancelled = manifest.get("cancelled", 0)
-
-    # Build a set of completed perm names for quick lookup
-    completed_perms: set[str] = set()
-    for entry in manifest.get("permutations", []):
-        if entry.get("status") == "completed":
-            perm_key = "x".join(f"{k}-{v}" for k, v in entry["params"].items())
-            completed_perms.add(perm_key)
-
-    # Check for incomplete runs and auto-resume
-    has_incomplete = any(
-        _is_incomplete(output_base / "x".join(f"{k}-{v}" for k, v in perm.items()))
-        for perm in permutations
-    )
-    if has_incomplete:
-        logger.info("Detected incomplete runs — will auto-resume")
-
-    run_idx = 0
-    total_to_run = sum(
-        1 for perm in permutations
-        if "x".join(f"{k}-{v}" for k, v in perm.items()) not in completed_perms
-    )
-
-    for idx, perm in enumerate(permutations):
-        perm_parts = [f"{k}-{v}" for k, v in perm.items()]
-        perm_name = "x".join(perm_parts)
-        perm_dir = output_base / perm_name
-
-        # Skip already-completed permutations
-        if perm_name in completed_perms:
-            manifest["permutations"][idx]["status"] = "completed"
-            continue
-
-        # Check for incomplete run and find resume path
-        resume_info = _get_resume_info(perm_dir, lora_name)
-        resume_path: Path | None = None
-        if resume_info["incomplete"]:
-            if resume_info["state_dir"]:
-                resume_path = resume_info["state_dir"]
-                logger.info(
-                    "Resuming %s from step %d/%d (state: %s)",
-                    perm_name, resume_info["current_step"],
-                    resume_info["total_steps"], resume_path.name,
-                )
-            else:
-                logger.warning(
-                    "Incomplete run %s (step %d/%d) but no state dir found — restarting",
-                    perm_name, resume_info["current_step"],
-                    resume_info["total_steps"],
-                )
-
-        run_idx += 1
-        print(f"\n[{run_idx}/{total_to_run}] {perm_name}")
-        if resume_path:
-            print(f"  \u21bb Resuming from {resume_path.name}")
-
-        run_params = {**base_params, **perm}
-        run_params["output_dir"] = str(perm_dir)
-
-        manifest["permutations"][idx]["status"] = "running"
-        manifest["permutations"][idx]["output_dir"] = str(perm_dir)
-        _write_json(manifest_path, manifest)
-
-        try:
-            result = run_single_training(run_params, perm_dir, f"matrix-{idx}", resume=resume_path)
-            if result["status"] == "completed":
-                manifest["permutations"][idx]["status"] = "completed"
-                manifest["completed"] += 1
-                completed += 1
-                _copy_final_model(perm_dir, output_base, lora_name, perm)
-                print(f"  \u2713 {perm_name}")
-
-                # Write per-permutation config artifact
-                _write_training_config(
-                    perm_dir, lora_name, run_params,
-                    mode="matrix",
-                    param_ranges=param_ranges,
-                )
-
-                # Training metrics chart — ASCII in terminal + PNG in perm folder
-                m_steps = result.get("metrics_steps", [])
-                m_loss = result.get("metrics_loss", [])
-                m_lr = result.get("metrics_lr", [])
-                if m_steps and m_loss:
-                    print_training_summary(m_steps, m_loss, m_lr if m_lr else None)
-                    try:
-                        png_path = perm_dir / f"{lora_name}_training_chart.png"
-                        generate_png_chart(
-                            m_steps,
-                            m_loss,
-                            m_lr if m_lr else None,
-                            png_path,
-                            title=f"Training: {lora_name} ({perm_name})",
-                        )
-                        print(f"  Chart saved -> {png_path.name}")
-                    except ImportError:
-                        logger.warning(
-                            "matplotlib not installed — skip PNG chart"
-                        )
-
-                # Post-training evaluation for this permutation
-                if eval_config is not None:
-                    print(f"  --- Running evaluation for {perm_name} ---")
-                    run_evaluation(eval_config, str(dataset_path), str(perm_dir), caption=eval_caption)
-            else:
-                err_detail = result.get("error") or f"exit code {result.get('exit_code', 'unknown')}"
-                error = f"exit code {result.get('exit_code', 'unknown')}"
-                if err_detail != error:
-                    error += f" — {err_detail}"
-                manifest["permutations"][idx]["status"] = "failed"
-                manifest["permutations"][idx]["error"] = error
-                manifest["failed"] += 1
-                failed += 1
-                print(f"  \u2717 {perm_name} — {error}", file=sys.stderr)
-        except Exception as e:
-            manifest["permutations"][idx]["status"] = "failed"
-            manifest["permutations"][idx]["error"] = str(e)
-            manifest["failed"] += 1
-            failed += 1
-            print(f"  \u2717 {perm_name} — {e}", file=sys.stderr)
-
-        _write_json(manifest_path, manifest)
-
-    print(f"\nMatrix finished: {completed} completed, {failed} failed")
-    print(f"Output: {output_base}")
-
-    # Write master matrix config artifact
-    _write_training_config(
-        output_base, lora_name, base_params,
-        mode="matrix",
-        param_ranges=param_ranges,
-    )
-
-    if failed > 0 and completed == 0:
         sys.exit(1)
 
 
@@ -1045,22 +705,26 @@ def main() -> None:
     # Validate mode
     if args.validate:
         dataset = ensure_dataset(args)
-        # Handle comma-separated matrix params — use first value for validation
-        _first_int = lambda v: int(str(v).split(",")[0])
+        _first_bs = int(str(args.batch_size).split(",")[0])
         valid, warnings = validate_dataset(
             dataset,
-            batch_size=_first_int(args.batch_size),
+            batch_size=_first_bs,
         )
+        if not valid:
+            for w in warnings:
+                print(f"  ERROR: {w}", file=sys.stderr)
+            sys.exit(1)
         if warnings:
-            print(f"\n  ({len(warnings)} warning(s) — training is still allowed)")
-        sys.exit(0 if valid else 1)
+            print(f"\n  ({len(warnings)} warning(s) \u2014 training is still allowed)")
+        sys.exit(0)
 
     dataset = ensure_dataset(args)
+    training_type = args.type
 
     # Training gate: check validation marker
     if not check_validation(dataset):
         print("ERROR: Dataset has not been validated.", file=sys.stderr)
-        print(f"  Run: uv run python scripts/train.py --validate --dataset {args.dataset}", file=sys.stderr)
+        print(f"  Run: uv run python scripts/train.py --type {training_type} --dataset {args.dataset} --validate", file=sys.stderr)
         sys.exit(1)
 
     # Resolve lora name
@@ -1068,15 +732,9 @@ def main() -> None:
     if args.name:
         lora_name = args.name
     else:
-        name = dataset_path.name
-        if name == "img":
-            name = dataset_path.parent.name
-        lora_name = name
+        lora_name = dataset_path.name
 
-    if args.mode == "single":
-        _run_single(args, dataset_path, lora_name)
-    else:
-        _run_matrix(args, dataset_path, lora_name)
+    _run_training(args, dataset_path, lora_name, training_type)
 
 
 if __name__ == "__main__":

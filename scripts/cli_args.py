@@ -7,53 +7,59 @@ import argparse
 import sys
 from typing import Any
 
-from scripts.constants import DEFAULTS, DEFAULT_EVAL_CONFIG
+from scripts.constants import (
+    CHARACTER_DEFAULTS,
+    SHARED_DEFAULTS,
+    STYLE_DEFAULTS,
+)
+
+
+def _type_defaults(type_: str) -> dict[str, Any]:
+    """Get type-specific defaults."""
+    return STYLE_DEFAULTS if type_ == "style" else CHARACTER_DEFAULTS
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser for the training CLI."""
     parser = argparse.ArgumentParser(
-        description="LoRA Matrix Trainer — single and matrix training modes",
+        description="LoRA Trainer — character and style LoRA training on Anima",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Validate a dataset
-  %(prog)s --validate --dataset datasets/froot/img
+  %(prog)s --type character --dataset datasets/emiru/ --validate
 
-  # Single training run with defaults
-  %(prog)s --dataset datasets/froot/img --name Froot-Anima
+  # Train a character LoRA with defaults
+  %(prog)s --type character --dataset datasets/emiru/ --name Emiru-Anima
+
+  # Train a style LoRA (lower LR, more steps, higher dim)
+  %(prog)s --type style --dataset datasets/blobcg/ --name BlobCG-Style
 
   # Custom parameters
-  %(prog)s --dataset datasets/froot/img --name Froot --lr 0.0001 --bs 2 --network-dim 32
-
-  # Matrix run (all permutations of given values)
-  %(prog)s --mode matrix --dataset datasets/froot/img --name Froot --network-dim 16,32 --alpha 1,16 --lr 0.0001,0.0002
-
-  # Matrix with output dir
-  %(prog)s --mode matrix --dataset datasets/froot/img --name Froot --network-dim 16,20,32 --alpha 1,20 -o datasets/froot/out/matrix-run
+  %(prog)s --type character --dataset datasets/emiru/ --name Emiru --lr 0.0001 --bs 2 --network-dim 32
 """
     )
 
-    # Mode
+    # Type (required)
     parser.add_argument(
-        "--mode", "-m",
-        choices=["single", "matrix"],
-        default="single",
-        help="Training mode: single run or matrix (permutation) sweep [default: single]",
+        "--type", "-t",
+        choices=["character", "style"],
+        default="character",
+        help="Training type: character (dim=8, lr=0.0002, steps=600) or style (dim=16, lr=0.0001, steps=1200) [default: character]",
     )
 
     # Validate
     parser.add_argument(
         "--validate",
         action="store_true",
-        help="Validate dataset (check image count, captions) and exit",
+        help="Validate dataset (check folder structure, image count, captions) and exit",
     )
 
     # Dataset (not required so --help works without it)
     parser.add_argument(
         "--dataset", "-d",
         default=None,
-        help="Path to directory containing training images and .txt captions",
+        help="Path to dataset directory (must contain img/ and out/ subdirectories)",
     )
 
     # Name
@@ -65,57 +71,57 @@ Examples:
     # Output
     parser.add_argument(
         "--output", "-o",
-        help="Output directory base (default: datasets/<name>/out/<job-id>)",
+        help="Output directory (default: <dataset>/out/)",
     )
 
     # ── Training parameters ──────────────────────────────────────────────
     parser.add_argument(
         "--network-dim",
         type=str,
-        default=str(DEFAULTS["network_dim"]),
-        help=f"LoRA dimension(s) [default: {DEFAULTS['network_dim']}] (comma-sep for matrix)",
+        default=None,
+        help=f"LoRA dimension [default: {CHARACTER_DEFAULTS['network_dim']} (char) / {STYLE_DEFAULTS['network_dim']} (style)]",
     )
     parser.add_argument(
         "--alpha", "-a",
         type=str,
-        default=str(DEFAULTS["network_alpha"]),
-        help=f"LoRA alpha(s) [default: {DEFAULTS['network_alpha']}] (comma-sep for matrix)",
+        default=str(CHARACTER_DEFAULTS["network_alpha"]),
+        help=f"LoRA alpha [default: {CHARACTER_DEFAULTS['network_alpha']}]",
     )
     parser.add_argument(
         "--learning-rate", "--lr",
         type=str,
-        default=str(DEFAULTS["learning_rate"]),
-        help=f"Learning rate(s) [default: {DEFAULTS['learning_rate']}] (comma-sep for matrix)",
+        default=None,
+        help=f"Learning rate [default: {CHARACTER_DEFAULTS['learning_rate']} (char) / {STYLE_DEFAULTS['learning_rate']} (style)]",
     )
     parser.add_argument(
         "--batch-size", "--bs",
         type=str,
-        default=str(DEFAULTS["batch_size"]),
-        help=f"Batch size(s) [default: {DEFAULTS['batch_size']}] (comma-sep for matrix)",
+        default=str(CHARACTER_DEFAULTS["batch_size"]),
+        help=f"Batch size [default: {CHARACTER_DEFAULTS['batch_size']}]",
     )
     parser.add_argument(
         "--max-steps", "--ss",
         type=str,
-        default=str(DEFAULTS["max_steps"]),
-        help=f"Max training step(s) [default: auto from batch_size (bs4=600, bs3=800, bs2=1000, bs1=1600), manual override] (comma-sep for matrix)",
+        default=None,
+        help=f"Max training steps [default: auto from batch_size and type (char bs4=600, style bs4=1200), manual override]",
     )
     parser.add_argument(
         "--optimizer",
         type=str,
-        default=DEFAULTS["optimizer"],
-        help=f"Optimizer(s) [default: {DEFAULTS['optimizer']}] (comma-sep for matrix)",
+        default=SHARED_DEFAULTS["optimizer"],
+        help=f"Optimizer [default: {SHARED_DEFAULTS['optimizer']}]",
     )
     parser.add_argument(
         "--scheduler", "-s",
         type=str,
-        default=DEFAULTS["scheduler"],
-        help=f"LR scheduler(s) [default: {DEFAULTS['scheduler']}] (comma-sep for matrix)",
+        default=SHARED_DEFAULTS["scheduler"],
+        help=f"LR scheduler [default: {SHARED_DEFAULTS['scheduler']}]",
     )
     parser.add_argument(
         "--resolution",
         type=str,
-        default=str(DEFAULTS["resolution"]),
-        help=f"Resolution(s) [default: {DEFAULTS['resolution']}] (comma-sep for matrix)",
+        default=str(SHARED_DEFAULTS["resolution"]),
+        help=f"Resolution [default: {SHARED_DEFAULTS['resolution']}]",
     )
     parser.add_argument(
         "--repeats", "-r",
@@ -141,31 +147,31 @@ Examples:
     parser.add_argument(
         "--mixed-precision",
         type=str,
-        default=DEFAULTS["mixed_precision"],
-        help=f"Mixed precision [default: {DEFAULTS['mixed_precision']}]",
+        default=SHARED_DEFAULTS["mixed_precision"],
+        help=f"Mixed precision [default: {SHARED_DEFAULTS['mixed_precision']}]",
     )
     parser.add_argument(
         "--timestep-sampling",
         type=str,
-        default=DEFAULTS["timestep_sampling"],
-        help=f"Timestep sampling [default: {DEFAULTS['timestep_sampling']}]",
+        default=SHARED_DEFAULTS["timestep_sampling"],
+        help=f"Timestep sampling [default: {SHARED_DEFAULTS['timestep_sampling']}]",
     )
     parser.add_argument(
         "--caption-dropout",
         type=float,
-        default=DEFAULTS["caption_tag_dropout_rate"],
-        help=f"Caption tag dropout rate [default: {DEFAULTS['caption_tag_dropout_rate']}]",
+        default=SHARED_DEFAULTS["caption_tag_dropout_rate"],
+        help=f"Caption tag dropout rate [default: {SHARED_DEFAULTS['caption_tag_dropout_rate']}]",
     )
     parser.add_argument(
         "--keep-tokens",
         type=int,
-        default=DEFAULTS["keep_tokens"],
-        help=f"Keep first N tokens from shuffle [default: {DEFAULTS['keep_tokens']}]",
+        default=SHARED_DEFAULTS["keep_tokens"],
+        help=f"Keep first N tokens from shuffle [default: {SHARED_DEFAULTS['keep_tokens']}]",
     )
     parser.add_argument(
         "--rebalance-buckets",
         action="store_true",
-        default=DEFAULTS["rebalance_buckets"],
+        default=SHARED_DEFAULTS["rebalance_buckets"],
         help="Detect dominant bucket skew (>20%% default) and redistribute by cropping excess images to adjacent buckets [default: on]",
     )
     parser.add_argument(
@@ -193,60 +199,40 @@ Examples:
         help="Random seed for bucket rebalance crop selection [default: 42]",
     )
 
-    # Matrix resume
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="(Matrix mode) Resume from existing manifest",
-    )
-
     # Evaluation
     parser.add_argument(
         "--evaluate",
         action="store_true",
-        help="Run sd.cpp inference on all trained LoRAs after training completes",
+        help="Run sd.cpp inference on the trained LoRA after training completes",
     )
     parser.add_argument(
         "--eval-config",
         type=str,
-        default=DEFAULT_EVAL_CONFIG,
-        help=f"Path to eval config JSON [default: {DEFAULT_EVAL_CONFIG}]",
+        default=None,
+        help="Path to eval config JSON",
     )
 
     return parser
 
 
-def parse_list_value(value: str) -> list[Any]:
-    """Parse a comma-separated value string into a list of mixed types."""
-    parts = [p.strip() for p in value.split(",")]
-    result: list[Any] = []
-    for part in parts:
-        if not part:
-            continue
-        try:
-            int_val = int(part)
-            if str(int_val) == part:
-                result.append(int_val)
-                continue
-        except ValueError:
-            pass
-        try:
-            result.append(float(part))
-            continue
-        except ValueError:
-            pass
-        result.append(part)
-    return result
+def parse_params(
+    args: argparse.Namespace,
+    training_type: str = "character",
+) -> dict[str, Any]:
+    """Parse CLI args into a training params dict.
 
+    Uses type-specific defaults for network_dim, learning_rate, and max_steps.
+    When a param is not explicitly set (None), the type-specific default is used.
+    max_steps is always None so that run_single_training can auto-calculate from batch_size.
+    """
+    td = _type_defaults(training_type)
 
-def parse_params(args: argparse.Namespace) -> dict[str, Any]:
-    """Parse CLI args into a training params dict (single value each)."""
     return {
-        "network_dim": int(args.network_dim),
+        "network_dim": int(args.network_dim) if args.network_dim is not None else td["network_dim"],
         "network_alpha": float(args.alpha),
-        "learning_rate": float(args.learning_rate),
+        "learning_rate": float(args.learning_rate) if args.learning_rate is not None else td["learning_rate"],
         "batch_size": int(args.batch_size),
-        "max_steps": int(args.max_steps),
+        "max_steps": int(args.max_steps) if args.max_steps is not None else None,
         "optimizer": args.optimizer,
         "scheduler": args.scheduler,
         "resolution": int(args.resolution),
@@ -263,34 +249,6 @@ def parse_params(args: argparse.Namespace) -> dict[str, Any]:
         "bucket_rebalance_max_aug": args.bucket_rebalance_max_aug,
         "bucket_rebalance_seed": args.bucket_rebalance_seed,
     }
-
-
-def parse_param_ranges(
-    args: argparse.Namespace,
-    include_single: bool = False,
-) -> dict[str, list[Any]]:
-    """Parse CLI args into param ranges dict.
-
-    If *include_single* is False (default), only parameters with multiple
-    values are returned (used for permutation generation).
-    If True, all range-capable parameters are returned.
-    """
-    range_keys: list[tuple[str, str]] = [
-        ("network_dim", args.network_dim),
-        ("network_alpha", args.alpha),
-        ("learning_rate", args.learning_rate),
-        ("batch_size", args.batch_size),
-        ("max_steps", args.max_steps),
-        ("optimizer", args.optimizer),
-        ("scheduler", args.scheduler),
-        ("resolution", args.resolution),
-    ]
-    ranges: dict[str, list[Any]] = {}
-    for key, value in range_keys:
-        parsed = parse_list_value(value)
-        if include_single or len(parsed) > 1:
-            ranges[key] = parsed
-    return ranges
 
 
 def ensure_dataset(args: argparse.Namespace) -> str:
