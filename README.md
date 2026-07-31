@@ -114,10 +114,28 @@ datasets/emiru/
   img/
     image001.jpg
     image001.txt    ← comma-separated tags, trigger word last
+    image001.tags   ← booru tags only (optional, from Caption-Studio)
     image002.jpg
     image002.txt
     ...
   out/              ← training output (created automatically if missing)
+```
+
+### Clean LoRA Metadata via `.tags` Files (Automatic)
+
+If you used Caption-Studio's **For Anima** mode to generate captions, each image has two files:
+
+| File | Content | Use |
+|------|---------|-----|
+| `image.txt` | Full caption (booru tags + natural language) | Training prompts |
+| `image.tags` | Booru tags only | Clean LoRA metadata |
+
+The trainer **auto-detects** `.tags` files. When 80%+ of images have matching `.tags` files, the post-training step replaces the contaminated `ss_tag_frequency` metadata in all `.safetensors` files (checkpoints + final model) with clean tag counts from `.tags` files. This removes natural language sentences from the embedded metadata while keeping training on the full `.txt` captions.
+
+No CLI flag needed - it happens automatically if `.tags` files are present. The validation step reports detection status:
+
+```
+  .tags files: 15/15 (100%) — clean metadata swap enabled
 ```
 
 ### Multiple Outfits / Variations
@@ -362,6 +380,7 @@ tests/                      ← test suite
 - Output overwrite protection: aborts if `{name}.safetensors` already exists at the output path
 - Per-step metrics (loss + LR) captured during training and rendered as an ASCII chart in the terminal after completion
 - A PNG training chart (`{name}_training_chart.png`) is saved in the output folder alongside the model
+- Auto `.tags` metadata swap: if `.tags` files (booru tags only, from Caption-Studio For Anima mode) are detected alongside images, the contaminated `ss_tag_frequency` metadata in all `.safetensors` files (checkpoints + final) is replaced with clean tag counts after training. Requires 80%+ coverage of images. No CLI flag needed.
 
 ## License
 

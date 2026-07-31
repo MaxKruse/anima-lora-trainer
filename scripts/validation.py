@@ -22,6 +22,7 @@ from scripts.constants import (
     VALIDATION_MARKER,
 )
 from scripts.dataset_toml import discover_subsets
+from scripts.swap_metadata import check_tags_coverage
 
 # Extensions that should be converted to .jpg during validation
 _CONVERTIBLE_EXTENSIONS = {".png", ".webp", ".bmp", ".tiff", ".tif", ".jfif", ".jif"}
@@ -148,11 +149,17 @@ def write_validation_marker(
     total_images = sum(s["num_images"] for s in subsets)
     total_captions = sum(s.get("num_captions", 0) for s in subsets)
 
+    tags_covered, tags_count, img_count = check_tags_coverage(
+        str(get_dataset_img_dir(dataset_dir))
+    )
+
     marker_data: dict[str, Any] = {
         "dataset": str(get_dataset_img_dir(dataset_dir)),
         "validated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "total_images": total_images,
         "total_captions": total_captions,
+        "tags_count": tags_count,
+        "tags_covered": tags_covered,
         "num_subsets": len(subsets),
         "subsets": [
             {
@@ -302,6 +309,13 @@ def validate_dataset(
         is_base = False
 
     print(f"  Total: {total_images} images, {total_captions} captions")
+
+    # ── Check for .tags files (clean metadata swap) ─────────────────────
+    tags_covered, tags_count, img_count = check_tags_coverage(str(img_dir))
+    if tags_covered:
+        print(f"  .tags files: {tags_count}/{img_count} ({tags_count/img_count*100:.0f}%) — clean metadata swap enabled")
+    elif tags_count > 0:
+        print(f"  .tags files: {tags_count}/{img_count} ({tags_count/img_count*100:.0f}%) — below threshold, swap skipped")
 
     # ── Total image count check ────────────────────────────────────────
     num_outfits = max(0, num_subsets - 1)

@@ -67,6 +67,7 @@ from scripts.training_chart import (
     parse_tensorboard_events,
     print_training_summary,
 )
+from scripts.swap_metadata import swap_metadata_on_all
 from scripts.zip_training_data import zip_training_data
 
 logger = logging.getLogger(__name__)
@@ -655,6 +656,9 @@ def _run_training(args: Any, dataset_path: Path, lora_name: str, training_type: 
 
     result = run_single_training(params, work_dir, lora_name, resume=resume_path)
     if result["status"] == "completed":
+        # Swap tag-frequency metadata with clean .tags data (all .safetensors files)
+        swap_metadata_on_all(str(work_dir), str(img_dir))
+
         # Copy final model from work dir to output base
         final_model = work_dir / f"{lora_name}.safetensors"
         if final_model.exists():
